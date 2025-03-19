@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="vsa_ogm",
@@ -20,7 +20,7 @@ setup(
     description=("Occupancy Grid Mapping with Hyperdimensional Computing"),
     keywords="vector symbolic architectures, hyperdimensional computing",
     url="https://github.com/shaymeister/highfrost",
-    packages=["vsa_ogm"],
+    packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
     ],

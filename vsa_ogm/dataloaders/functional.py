@@ -4,6 +4,7 @@ from vsa_ogm.dataloaders import (
     CSVDataLoader,
     PickleDataLoader,
     ToySimDataLoader,
+    OccupancyGridDataLoader,
 )
 
 
@@ -34,6 +35,9 @@ def load_single_data(config: DictConfig) -> tuple:
     elif config.data.dataset_name == "intel":
         dataloader = CSVDataLoader(config.data.intel)
         world_size = config.data.intel.world_bounds
+    elif config.data.dataset_name == "occupancy_grid":
+        dataloader = OccupancyGridDataLoader(config.data.occupancy_grid)
+        world_size = config.data.occupancy_grid.world_bounds
     else:
         raise ValueError(F"Unknown dataset: {config.data.dataset_name}")
 
