@@ -16,7 +16,7 @@ def test_occupancy_grid_dataloader():
     """
     # Create a configuration for the dataloader
     config = OmegaConf.create({
-        "data_dir": "datasets/obstacle_map.npy",
+        "data_dir": "inputs/obstacle_map.npy",
         "world_bounds": [-50, 50, -50, 50],  # Adjust based on the grid
         "resolution": 0.1  # Meters per cell
     })

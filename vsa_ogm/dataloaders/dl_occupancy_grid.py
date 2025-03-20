@@ -62,8 +62,6 @@ class OccupancyGridDataLoader:
         # Note: In grid coordinates, [0,0] is typically the top-left corner
         # We need to flip the y-axis to match the world coordinate system
         x_min, x_max, y_min, y_max = self.world_bounds
-        world_width = x_max - x_min
-        world_height = y_max - y_min
         
         # Scale grid coordinates to world coordinates
         world_coords = np.zeros_like(grid_coords, dtype=float)
@@ -78,6 +76,8 @@ class OccupancyGridDataLoader:
             "lidar_data": world_coords,
             "occupancy": occupancy_values
         }
+        
+        print(f"Converted occupancy grid with {grid_height * grid_width} cells to point cloud")
         
         return copy.deepcopy(self.point_cloud)
     

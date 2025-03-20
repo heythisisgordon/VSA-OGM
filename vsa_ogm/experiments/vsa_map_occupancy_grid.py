@@ -37,7 +37,7 @@ BASE_CONFIG: dict = {
         "dataset_name": "occupancy_grid",  # toysim, intel, occupancy_grid
         "test_split": 0.1,
         "occupancy_grid": {
-            "data_dir": "datasets/obstacle_map.npy",
+            "data_dir": "inputs/obstacle_map.npy",
             "world_bounds": [-50, 50, -50, 50],  # x_min, x_max, y_min, y_max; meters
             "resolution": 0.1  # Meters per cell
         },
