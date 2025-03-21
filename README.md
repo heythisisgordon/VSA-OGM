@@ -1,28 +1,14 @@
-## VSA-OGM - Occupancy Grid Mapping in 2D
+# VSA-OGM - Occupancy Grid Mapping in 2D
 
 In this application of bio-inspired vector symbolic architectures, we employ a novel hyperdimensional occupancy grid mapping system with Shannon entropy. For the most in-depth exploration of our experiments and results, please take a look at [our paper](https://arxiv.org/pdf/2408.09066).
 
 *This work was supported under grant 5.21 from the University of Michigan's Automotive Research Center (ARC) and the U.S. Army's Ground Vehicle Systems Center (GVSC).* 
 
-<img src="./assets/toy-sim.gif" width="300" height="300"/> <img src="./assets/vsa-toysim-crop.gif" width="370" height="300" />
+<img src="./docs/assets/toy-sim.gif" width="300" height="300"/> <img src="./docs/assets/vsa-toysim-crop.gif" width="370" height="300" />
 
----
+## Installation
 
-### Directory Structure
-
-- **dataloaders**: individual classes to lead different dataset formats
-- **datasets**: the Intel map and single-agent toysim datasets
-- **experiments**: script files to run the single and multi-agent experiments with the toysim and Intel datasets
-- **notebooks**: tools to evaluate against EviLOG, run the ablation study, evaluate runtime performance, and perform Shannon-based entropy extraction
-- **metrics.py**: functions to calculate TP and FP rates along with AUC
-- **plotting.py**: functions to visualize statistical results
-- **utilities.py**: functions to split training dataset into train and test sets
-
----
-
-###
-
-The VSA-OGM is wrapped together as a single pip package. You must pre-install pytorch depending on your specific machine and the semantic pointer library (spl). SPL is included in this repo as a second directory. You can locally install the library with the following command:
+VSA-OGM is packaged as a Python package. You can install it locally with:
 
 ```bash
 python -m pip install .
@@ -30,40 +16,72 @@ python -m pip install .
 
 It has currently been tested on MacOS and Ubuntu with CPU and CUDA 11.7. Other operating systems and CUDA versions should be supported but it has not been formally tested.
 
----
+## Usage
 
-### Datasets
+### Basic Usage
 
-- Toy Sim (Single Agent): included in `datasets`
-- Toy Sim (Fusion): download [Agent 1](https://gmuedu-my.sharepoint.com/:u:/g/personal/ssnyde9_gmu_edu/EVNScsJma1lMpQmTgLmBmBoBaVgLRgwrIcVRiWLAOtHiqA?e=GrE7eq) and [Agent 2](https://gmuedu-my.sharepoint.com/:u:/g/personal/ssnyde9_gmu_edu/ETE2c01yROlIkH3-gLSo7vsBIKKOt1S_fgdVfthFgEgW3Q?e=aEAXiM)
-- Intel (Single Agent): included in `datasets`
-- Intel (Fusion): generate with [this notebook](./notebooks/datasets/intel_map_fusion_data.ipynb)
-- EviLOG: download according to [their repository](https://github.com/ika-rwth-aachen/EviLOG)
+```python
+from vsa_ogm import pointcloud_to_ogm
 
----
+# Convert a point cloud to an occupancy grid map
+pointcloud_to_ogm(
+    input_file="inputs/obstacle_map.npy",
+    output_file="outputs/obstacle_grid.npz",
+    world_bounds=[-50, 50, -50, 50],  # Optional
+    resolution=0.1,                   # Optional
+    verbose=True                      # Optional
+)
+```
 
-### Experiments
+### Command Line Interface
 
-Both the Intel map and Toy sim single agent experiments can be recreated with `vsa_map_single.py` in the `experiments` directory.
+VSA-OGM also provides a command-line interface:
 
-Conversely, the fusion experiments can be duplicated with `vsa_map_fusion.py` in the same directory. The runtime processing and entropy based information extraction were done with Jupyter in the `notebooks` directory.
+```bash
+# After installing the package
+vsa-ogm inputs/obstacle_map.npy outputs/obstacle_grid.npz --verbose
+```
 
-We trained EviLOG with the author's codebase. Our evaluation on their dataset was conducted with Jupyter in the `notebooks/datasets` directory.
+Or you can run the module directly:
 
----
+```bash
+python -m vsa_ogm.main inputs/obstacle_map.npy outputs/obstacle_grid.npz --verbose
+```
 
-### Authors and Contact Information
+### Examples
+
+Check out the `examples` directory for more usage examples:
+
+```bash
+python examples/basic_usage.py
+```
+
+## Directory Structure
+
+- **src**: Core package with the VSA-OGM implementation
+  - **main.py**: Main entry point with function-based API
+  - **mapper.py**: Core VSA-OGM algorithm implementation
+  - **functional.py**: Vector operations for VSA-OGM
+  - **io.py**: Input/output functions
+  - **utils.py**: Utility functions
+- **examples**: Example scripts demonstrating usage
+- **tests**: Unit tests
+- **docs**: Documentation and refactoring plans
+
+## Datasets
+
+For information about the datasets used in the original experiments, please refer to [our paper](https://arxiv.org/pdf/2408.09066).
+
+## Authors and Contact Information
 
 - **Shay Snyder****: [ssnyde9@gmu.edu](ssnyde9@gmu.edu)
 - **Andrew Capodieci**: [acapodieci@neyarobotics.com](acapodieci@neyarobotics.com)
 - **David Gorsich**: [david.j.gorsich.civ@army.mil](david.j.gorsich.civ@army.mil)
 - **Maryam Parsa**: [mparsa@gmu.edu](mparsa@gmu.edu)
 
-If you have any issues, questions, comments, or concerns about Highfrost, please reach out to the corresponding author (**). We will respond as soon as possible.
+If you have any issues, questions, comments, or concerns about VSA-OGM, please reach out to the corresponding author (**). We will respond as soon as possible.
 
----
-
-### Reference and Citation
+## Reference and Citation
 
 If you find our work useful in your research endeavors, we would appreciate if you would consider citing [our paper](https://arxiv.org/pdf/2408.09066):
 
@@ -78,4 +96,3 @@ If you find our work useful in your research endeavors, we would appreciate if y
       url={https://arxiv.org/abs/2408.09066}, 
 }
 ```
-

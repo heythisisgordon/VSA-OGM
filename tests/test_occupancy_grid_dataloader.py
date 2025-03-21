@@ -2,12 +2,15 @@ import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from omegaconf import OmegaConf
 
 # Add the parent directory to the path so we can import the vsa_ogm package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vsa_ogm.dataloaders import OccupancyGridDataLoader
+from vsa_ogm.io import load_pointcloud, convert_occupancy_grid_to_pointcloud
+from vsa_ogm.mapper import VSAMapper
 
 def test_occupancy_grid_dataloader():
     """
@@ -60,9 +63,90 @@ def test_occupancy_grid_dataloader():
     # Save the figure
     plt.savefig('occupancy_grid_point_cloud.png', dpi=300)
     print("Visualization saved to 'occupancy_grid_point_cloud.png'")
+
+def test_io_functions():
+    """
+    Test the I/O functions for loading and converting point clouds and occupancy grids.
+    """
+    # Test loading a point cloud
+    input_file = "inputs/obstacle_map.npy"
+    points, labels = load_pointcloud(input_file)
     
-    # Show the figure
-    plt.show()
+    print(f"Loaded point cloud with {points.shape[0]} points")
+    print(f"Point cloud shape: {points.shape}")
+    print(f"Labels shape: {labels.shape}")
+    
+    # Test converting an occupancy grid to a point cloud
+    grid = np.load(input_file)
+    world_bounds = [-50, 50, -50, 50]
+    resolution = 0.1
+    
+    points, labels = convert_occupancy_grid_to_pointcloud(grid, world_bounds, resolution)
+    
+    print(f"Converted occupancy grid to point cloud with {points.shape[0]} points")
+    print(f"Point cloud shape: {points.shape}")
+    print(f"Labels shape: {labels.shape}")
+
+def test_vsa_mapper():
+    """
+    Test the VSAMapper class with a small example.
+    """
+    # Create a small test grid
+    grid = np.zeros((10, 10), dtype=np.int32)
+    grid[4:7, 4:7] = 1  # Add a small square in the middle
+    
+    # Convert to point cloud
+    world_bounds = [0, 1, 0, 1]
+    resolution = 0.1
+    
+    points, labels = convert_occupancy_grid_to_pointcloud(grid, world_bounds, resolution)
+    
+    # Create mapper
+    config = {
+        "world_bounds": world_bounds,
+        "resolution": resolution,
+        "axis_resolution": 0.2,
+        "vsa_dimensions": 1000,  # Use smaller dimensions for testing
+        "quadrant_hierarchy": [2],  # Use smaller hierarchy for testing
+        "length_scale": 2.0,
+        "use_query_normalization": True,
+        "decision_thresholds": [-0.99, 0.99],
+        "verbose": True
+    }
+    
+    mapper = VSAMapper(config)
+    
+    # Process observation
+    mapper.process_observation(points, labels)
+    
+    # Get occupancy grid
+    occupancy_grid = mapper.get_occupancy_grid()
+    
+    print(f"Generated occupancy grid with shape: {occupancy_grid.shape}")
+    
+    # Visualize
+    plt.figure(figsize=(10, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.imshow(grid, origin='lower', cmap='viridis')
+    plt.title('Original Grid')
+    plt.colorbar()
+    
+    plt.subplot(1, 2, 2)
+    plt.imshow(occupancy_grid.detach().cpu().numpy(), origin='lower', cmap='viridis')
+    plt.title('VSA Occupancy Grid')
+    plt.colorbar()
+    
+    plt.tight_layout()
+    plt.savefig('vsa_mapper_test.png', dpi=300)
+    print("Visualization saved to 'vsa_mapper_test.png'")
 
 if __name__ == "__main__":
+    print("Testing OccupancyGridDataLoader...")
     test_occupancy_grid_dataloader()
+    
+    print("\nTesting I/O functions...")
+    test_io_functions()
+    
+    print("\nTesting VSAMapper...")
+    test_vsa_mapper()
