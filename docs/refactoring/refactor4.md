@@ -1,4 +1,4 @@
-# Phase 3: Enhanced VSA Mapper Implementation
+# Phase 3: Enhanced VSA Mapper Implementation - Core Structure
 
 ## Summary of Overall Task
 
@@ -6,13 +6,15 @@ The overall task is to implement a Grid-Based Sequential VSA-OGM mapping pipelin
 
 1. Efficient spatial indexing with adaptive cell sizing (Phase 1)
 2. Optimized vector computation with parallel processing and caching (Phase 2)
-3. Memory-aware processing with GPU memory monitoring (Phase 3 - Current)
-4. Incremental processing with horizon-limited visibility (Phase 3 - Current)
-5. Enhanced VSA mapper with direct spatial processing (Phase 3 - Current)
+3. Memory-aware processing with GPU memory monitoring (Phase 3 - current)
+4. Shannon entropy feature extraction
+5. Enhanced class grid generation based on entropy values 
+6. Incremental processing with horizon-limited visibility
+7. Enhanced VSA mapper with direct spatial processing
 
-## Phase 3 Focus: Enhanced VSA Mapper
+## Phase 3 Focus: Enhanced VSA Mapper Core Structure
 
-In this phase, we will implement an enhanced version of the `VSAMapper` class called `EnhancedVSAMapper` that incorporates the optimized spatial indexing and vector caching from the previous phases, along with memory-aware processing and improved incremental capabilities. This is the core component that will enable efficient processing of large point clouds with limited memory resources.
+In this phase, we will implement the basic structure of an enhanced version of the `VSAMapper` class called `EnhancedVSAMapper` that incorporates the optimized spatial indexing and vector caching from the previous phases, along with memory-aware processing and improved incremental capabilities. This is the core component that will enable efficient processing of large point clouds with limited memory resources.
 
 ### Current Implementation Analysis
 
@@ -162,7 +164,7 @@ def check_memory_usage(self) -> bool:
     return False
 ```
 
-3. **Enhanced Observation Processing**
+3. **Basic Observation Processing**
 
 ```python
 def process_observation(
@@ -315,7 +317,37 @@ def _process_points_spatially(
                 self.check_memory_usage()
 ```
 
-5. **Enhanced Incremental Processing**
+5. **Basic Grid Update**
+
+```python
+def _update_class_grid(self) -> None:
+    """
+    Update class grid based on occupied and empty grids.
+    """
+    # Normalize grids
+    max_occupied = torch.max(self.occupied_grid)
+    if max_occupied > 0:
+        occupied_norm = self.occupied_grid / max_occupied
+    else:
+        occupied_norm = self.occupied_grid
+    
+    max_empty = torch.max(self.empty_grid)
+    if max_empty > 0:
+        empty_norm = self.empty_grid / max_empty
+    else:
+        empty_norm = self.empty_grid
+    
+    # Initialize with unknown (0)
+    self.class_grid = torch.zeros_like(self.occupied_grid)
+    
+    # Set occupied (1) where occupied grid > upper threshold
+    self.class_grid[occupied_norm > self.decision_thresholds[1]] = 1
+    
+    # Set empty (-1) where empty grid > upper threshold
+    self.class_grid[empty_norm > self.decision_thresholds[1]] = -1
+```
+
+6. **Basic Incremental Processing**
 
 ```python
 def process_incrementally(
@@ -439,35 +471,9 @@ def process_incrementally(
         print(f"Incremental processing completed in {self.stats['incremental_time']:.2f} seconds")
 ```
 
-6. **Grid Update and Retrieval Methods**
+7. **Basic Grid Retrieval Methods**
 
 ```python
-def _update_class_grid(self) -> None:
-    """
-    Update class grid based on occupied and empty grids.
-    """
-    # Normalize grids
-    max_occupied = torch.max(self.occupied_grid)
-    if max_occupied > 0:
-        occupied_norm = self.occupied_grid / max_occupied
-    else:
-        occupied_norm = self.occupied_grid
-    
-    max_empty = torch.max(self.empty_grid)
-    if max_empty > 0:
-        empty_norm = self.empty_grid / max_empty
-    else:
-        empty_norm = self.empty_grid
-    
-    # Initialize with unknown (0)
-    self.class_grid = torch.zeros_like(self.occupied_grid)
-    
-    # Set occupied (1) where occupied grid > upper threshold
-    self.class_grid[occupied_norm > self.decision_thresholds[1]] = 1
-    
-    # Set empty (-1) where empty grid > upper threshold
-    self.class_grid[empty_norm > self.decision_thresholds[1]] = -1
-
 def get_occupancy_grid(self) -> torch.Tensor:
     """
     Get the current occupancy grid.
@@ -504,7 +510,7 @@ def get_class_grid(self) -> torch.Tensor:
     return self.class_grid
 ```
 
-7. **Performance Statistics Methods**
+8. **Performance Statistics Method**
 
 ```python
 def get_stats(self) -> Dict[str, Any]:
@@ -544,252 +550,18 @@ def get_stats(self) -> Dict[str, Any]:
     return combined_stats
 ```
 
-### Testing Plan
+### Implementation Notes
 
-1. **Unit Tests for EnhancedVSAMapper**
+This phase focuses on implementing the core structure of the enhanced VSA mapper with memory-aware processing and improved incremental capabilities. The key enhancements over the original implementation include:
 
-```python
-def test_enhanced_vsa_mapper():
-    """Test the EnhancedVSAMapper class."""
-    # Create a test point cloud
-    points = torch.tensor([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [0.5, 0.5]
-    ])
-    
-    labels = torch.tensor([0, 1, 0, 1, 0])
-    
-    # Create mapper configuration
-    config = {
-        "world_bounds": [0, 1, 0, 1],
-        "resolution": 0.1,
-        "min_cell_resolution": 0.1,
-        "max_cell_resolution": 0.5,
-        "vsa_dimensions": 1000,  # Use smaller dimensions for testing
-        "length_scale": 2.0,
-        "decision_thresholds": [-0.99, 0.99],
-        "verbose": True,
-        "batch_size": 2,
-        "cache_size": 100,
-        "memory_threshold": 0.8
-    }
-    
-    # Use CPU for testing to ensure compatibility
-    device = torch.device("cpu")
-    mapper = EnhancedVSAMapper(config, device=device)
-    
-    # Process observation
-    mapper.process_observation(points, labels)
-    
-    # Get occupancy grid
-    occupancy_grid = mapper.get_occupancy_grid()
-    
-    # Verify grid dimensions
-    assert occupancy_grid.shape == (10, 10)  # 1x1 world with 0.1 resolution
-    
-    # Get class grid
-    class_grid = mapper.get_class_grid()
-    
-    # Verify class grid dimensions
-    assert class_grid.shape == (10, 10)
-    
-    # Test incremental processing
-    mapper.process_incrementally(
-        horizon_distance=0.5,
-        sample_resolution=0.2,
-        max_samples=5,
-        safety_margin=0.1
-    )
-    
-    # Get updated occupancy grid
-    incremental_grid = mapper.get_occupancy_grid()
-    
-    # Verify grid dimensions
-    assert incremental_grid.shape == (10, 10)
-    
-    # Get statistics
-    stats = mapper.get_stats()
-    
-    # Verify statistics
-    assert "total_time" in stats
-    assert "total_points_processed" in stats
-    assert stats["total_points_processed"] >= 5  # At least the original points
-    
-    # Test memory monitoring
-    cleared = mapper.check_memory_usage()
-    
-    # Should not clear cache on CPU with small data
-    assert not cleared
-```
+1. **Memory Monitoring**: The enhanced mapper continuously monitors memory usage and takes appropriate actions to prevent out-of-memory errors.
 
-2. **Performance Tests**
+2. **Optimized Incremental Processing**: The incremental processing approach is optimized with configurable parameters and safety margin checking.
 
-```python
-def test_enhanced_vsa_mapper_performance():
-    """Test the performance of the EnhancedVSAMapper class."""
-    # Skip if CUDA is not available
-    if not torch.cuda.is_available():
-        print("CUDA is not available. Skipping performance test.")
-        return
-    
-    # Load a sample point cloud
-    input_file = "inputs/obstacle_map.npy"
-    if not os.path.exists(input_file):
-        print(f"Input file {input_file} not found. Skipping performance test.")
-        return
-    
-    # Set world bounds
-    world_bounds = [-50, 50, -50, 50]
-    
-    # Set device
-    device = torch.device("cuda")
-    
-    # Load point cloud
-    points, labels = load_pointcloud(input_file, device)
-    print(f"Loaded point cloud with {points.shape[0]} points")
-    
-    # Create enhanced mapper configuration
-    enhanced_config = {
-        "world_bounds": world_bounds,
-        "resolution": 0.1,
-        "min_cell_resolution": 0.5,
-        "max_cell_resolution": 2.0,
-        "vsa_dimensions": 8000,  # Reduced dimensions to avoid OOM errors
-        "length_scale": 2.0,
-        "decision_thresholds": [-0.99, 0.99],
-        "verbose": True,
-        "batch_size": 1000,
-        "cache_size": 10000,
-        "memory_threshold": 0.8
-    }
-    
-    # Create enhanced mapper
-    print("\nInitializing EnhancedVSAMapper...")
-    enhanced_mapper = EnhancedVSAMapper(enhanced_config, device=device)
-    
-    # Process observation
-    print("\nProcessing observation with EnhancedVSAMapper...")
-    enhanced_mapper.process_observation(points, labels)
-    
-    # Get enhanced occupancy grid
-    enhanced_grid = enhanced_mapper.get_occupancy_grid()
-    
-    # Process incrementally
-    print("\nProcessing incrementally with EnhancedVSAMapper...")
-    enhanced_mapper.process_incrementally(
-        horizon_distance=10.0,
-        sample_resolution=1.0,
-        max_samples=100,
-        safety_margin=0.5
-    )
-    
-    # Get enhanced incremental grid
-    enhanced_incremental_grid = enhanced_mapper.get_occupancy_grid()
-    
-    # Get statistics
-    enhanced_stats = enhanced_mapper.get_stats()
-    
-    # Print statistics
-    print("\n=== EnhancedVSAMapper Statistics ===")
-    print(f"Total time: {enhanced_stats['total_time']:.4f} seconds")
-    print(f"Process time: {enhanced_stats['process_time']:.4f} seconds")
-    print(f"Incremental time: {enhanced_stats['incremental_time']:.4f} seconds")
-    print(f"Total points processed: {enhanced_stats['total_points_processed']}")
-    print(f"Total samples processed: {enhanced_stats['total_samples_processed']}")
-    print(f"Points per second: {enhanced_stats['points_per_second']:.2f}")
-    print(f"Cache hit rate: {enhanced_stats['cache_hit_rate']*100:.2f}%")
-    
-    # Print GPU memory usage
-    print("\n=== GPU Memory Usage ===")
-    print(f"Current memory: {enhanced_stats.get('current_memory_gb', 'N/A')} GB")
-    print(f"Max memory: {enhanced_stats.get('max_memory_gb', 'N/A')} GB")
-    print(f"Memory usage ratio: {enhanced_stats.get('memory_usage_ratio', 'N/A')}")
-    
-    # Visualize results
-    os.makedirs("outputs", exist_ok=True)
-    
-    # Visualize enhanced occupancy grid
-    visualize_occupancy_grid(
-        grid=enhanced_grid,
-        output_file="outputs/enhanced_occupancy_grid.png",
-        world_bounds=world_bounds,
-        colormap="viridis",
-        show=False
-    )
-    
-    # Visualize enhanced incremental grid
-    visualize_occupancy_grid(
-        grid=enhanced_incremental_grid,
-        output_file="outputs/enhanced_incremental_grid.png",
-        world_bounds=world_bounds,
-        colormap="viridis",
-        show=False
-    )
-    
-    print("Visualizations saved to 'outputs/enhanced_occupancy_grid.png' and 'outputs/enhanced_incremental_grid.png'")
-```
+3. **Performance Statistics**: Detailed statistics are collected for performance monitoring and analysis.
 
-3. **Comparison with Original VSAMapper**
+The base implementation in this phase will be extended in Phase 4 to add the Shannon entropy-based feature extraction capability described in the paper, which will significantly enhance the mapper's ability to extract features from noisy HDC representations.
 
-```python
-def test_mapper_comparison():
-    """Compare the performance of the original VSAMapper and EnhancedVSAMapper."""
-    # Skip if CUDA is not available
-    if not torch.cuda.is_available():
-        print("CUDA is not available. Skipping comparison test.")
-        return
-    
-    # Load a sample point cloud
-    input_file = "inputs/obstacle_map.npy"
-    if not os.path.exists(input_file):
-        print(f"Input file {input_file} not found. Skipping comparison test.")
-        return
-    
-    # Set world bounds
-    world_bounds = [-50, 50, -50, 50]
-    
-    # Set device
-    device = torch.device("cuda")
-    
-    # Load point cloud
-    points, labels = load_pointcloud(input_file, device)
-    print(f"Loaded point cloud with {points.shape[0]} points")
-    
-    # Common configuration
-    common_config = {
-        "world_bounds": world_bounds,
-        "resolution": 0.1,
-        "vsa_dimensions": 8000,  # Reduced dimensions to avoid OOM errors
-        "length_scale": 2.0,
-        "decision_thresholds": [-0.99, 0.99],
-        "verbose": False,
-        "batch_size": 1000
-    }
-    
-    # Original mapper configuration
-    original_config = common_config.copy()
-    
-    # Enhanced mapper configuration
-    enhanced_config = common_config.copy()
-    enhanced_config.update({
-        "min_cell_resolution": 0.5,
-        "max_cell_resolution": 2.0,
-        "cache_size": 10000,
-        "memory_threshold": 0.8
-    })
-    
-    # Test original mapper
-    print("\n=== Testing Original VSAMapper ===")
-    
-    # Time original initialization
-    start_time = time.time()
-    original_mapper = VSAMapper(original_config, device=device)
-    original_init_time = time.time() - start_time
-    print(f"Original initialization time: {original_init_time:.4f} seconds")
-    
-    # Time original processing
-    start_time = time.time()
-    original_mapper.process_observation(
+### Next Steps
+
+After implementing the core structure of the enhanced VSA mapper, we will proceed to Phase 4, which will focus on implementing the Shannon entropy-based feature extraction capability described in the paper.

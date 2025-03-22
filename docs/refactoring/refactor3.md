@@ -7,8 +7,10 @@ The overall task is to implement a Grid-Based Sequential VSA-OGM mapping pipelin
 1. Efficient spatial indexing with adaptive cell sizing (Phase 1)
 2. Optimized vector computation with parallel processing and caching (Phase 2 - Current)
 3. Memory-aware processing with GPU memory monitoring
-4. Incremental processing with horizon-limited visibility
-5. Enhanced VSA mapper with direct spatial processing
+4. Shannon entropy feature extraction
+5. Enhanced class grid generation based on entropy values 
+6. Incremental processing with horizon-limited visibility
+7. Enhanced VSA mapper with direct spatial processing
 
 ## Phase 2 Focus: Optimized Vector Caching
 
