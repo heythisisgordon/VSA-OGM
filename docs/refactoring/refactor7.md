@@ -4,13 +4,12 @@
 
 The overall task is to implement a Grid-Based Sequential VSA-OGM mapping pipeline that treats each sampling point like a robot pose keyframe. This approach processes the point cloud incrementally, focusing on local points within sensor range at each sampling location, rather than processing the entire point cloud at once. The implementation will include:
 
-1. Efficient spatial indexing with adaptive cell sizing (Phase 1)
-2. Optimized vector computation with parallel processing and caching (Phase 2)
-3. Memory-aware processing with GPU memory monitoring (Phase 3)
-4. Incremental processing with horizon-limited visibility (Phase 3)
-5. Enhanced VSA mapper with direct spatial processing (Phase 3)
-6. Updated main interface and CLI (Phase 4)
-7. Comprehensive testing and documentation (Phase 5 - Current)
+Phase 1: Adaptive Spatial Indexing Implementation
+Phase 2: Optimized Vector Caching Implementation
+Phase 3: Enhanced VSA Mapper Implementation - Core Structure
+Phase 4: Shannon Entropy Feature Extraction Implementation
+Phase 5: Main Interface and CLI Updates
+Phase 6: Comprehensive Testing and Documentation (Current Phase)
 
 ## Phase 5 Focus: Comprehensive Testing and Documentation
 
