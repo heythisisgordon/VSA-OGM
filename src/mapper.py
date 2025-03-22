@@ -1,20 +1,20 @@
-"""Core VSA-OGM mapper implementation."""
+"""VSA-OGM mapper implementation."""
 
 import torch
 import numpy as np
-from typing import Dict, Any, Optional, List, Tuple, Union
-import os
 import time
+from typing import Dict, Any, Optional, List, Tuple, Union
 
-from .functional import bind, power, SSPGenerator
-from .functional import bind_batch
+from .functional import SSPGenerator
+from .spatial import AdaptiveSpatialIndex
+from .cache import VectorCache
 
 class VSAMapper:
     """
-    Vector Symbolic Architecture Mapper for Occupancy Grid Mapping.
+    VSA Mapper with adaptive spatial indexing, vector caching, and memory monitoring.
     
-    This class implements the core VSA-OGM algorithm, converting point clouds
-    to occupancy grid maps using vector symbolic operations.
+    This class implements the VSA-OGM algorithm with optimizations for memory usage,
+    computational efficiency, and scalability.
     """
     
     def __init__(
@@ -26,74 +26,100 @@ class VSAMapper:
         Initialize the VSA mapper.
         
         Args:
-            config: Configuration dictionary with the following keys:
+            config: Configuration dictionary with parameters:
                 - world_bounds: World bounds [x_min, x_max, y_min, y_max]
                 - resolution: Grid resolution in meters
-                - axis_resolution: Resolution for axis vectors
+                - min_cell_resolution: Minimum resolution for spatial indexing
+                - max_cell_resolution: Maximum resolution for spatial indexing
                 - vsa_dimensions: Dimensionality of VSA vectors
-                - quadrant_hierarchy: List of quadrant hierarchy levels
                 - length_scale: Length scale for power operation
-                - use_query_normalization: Whether to normalize query vectors
+                - batch_size: Batch size for processing points
+                - cache_size: Maximum size of vector cache
+                - memory_threshold: Threshold for GPU memory usage (0.0-1.0)
                 - decision_thresholds: Thresholds for decision making
             device: Device to use for computation
         """
-        self.config = config
-        # Default to CUDA when available
+        # Set device
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Extract configuration parameters
         self.world_bounds = config["world_bounds"]
         self.resolution = config.get("resolution", 0.1)
-        self.axis_resolution = config.get("axis_resolution", 0.5)
+        self.min_cell_resolution = config.get("min_cell_resolution", self.resolution * 5)
+        self.max_cell_resolution = config.get("max_cell_resolution", self.resolution * 20)
         self.vsa_dimensions = config.get("vsa_dimensions", 16000)
-        self.quadrant_hierarchy = config.get("quadrant_hierarchy", [4])
         self.length_scale = config.get("length_scale", 2.0)
-        self.use_query_normalization = config.get("use_query_normalization", True)
-        self.decision_thresholds = config.get("decision_thresholds", [-0.99, 0.99])
+        self.batch_size = config.get("batch_size", 1000)
+        self.cache_size = config.get("cache_size", 10000)
+        self.memory_threshold = config.get("memory_threshold", 0.8)  # 80% by default
         self.verbose = config.get("verbose", False)
+        self.decision_thresholds = config.get("decision_thresholds", [-0.99, 0.99])
         
-        # Initialize core components
-        self.environment_dimensionality = 2
+        # Calculate normalized world bounds
         self.world_bounds_norm = (
-            self.world_bounds[1] - self.world_bounds[0],
-            self.world_bounds[3] - self.world_bounds[2]
+            self.world_bounds[1] - self.world_bounds[0],  # x range
+            self.world_bounds[3] - self.world_bounds[2]   # y range
         )
         
-        # Initialize dependencies
-        self.pdist = torch.nn.PairwiseDistance()
+        # Initialize SSP generator for axis vectors
         self.ssp_generator = SSPGenerator(
             dimensionality=self.vsa_dimensions,
             device=self.device,
             length_scale=self.length_scale
         )
         
-        # Initialize empty variables for class methods
-        self.quadrant_axis_bounds = []
-        self.quadrant_centers = []
-        self.quadrant_indices_x = None
-        self.quadrant_indices_y = None
-        self.occupied_quadrant_memory_vectors = None
-        self.empty_quadrant_memory_vectors = None
-        self.xy_axis_linspace = []
-        self.xy_axis_vectors = None
-        self.xy_axis_matrix = None
-        self.xy_axis_occupied_heatmap = None
-        self.xy_axis_empty_heatmap = None
-        self.xy_axis_class_matrix = None
+        # Generate axis vectors
+        self.xy_axis_vectors = self.ssp_generator.generate(2)  # 2D environment
         
-        # Build the mapper components
-        self._build_quadrant_hierarchy()
-        self._build_quadrant_memory_hierarchy()
-        self._build_quadrant_indices()
-        self._build_xy_axis_linspace()
-        self._build_xy_axis_vectors()
-        self._build_xy_axis_matrix()
-        self._build_xy_axis_heatmaps()
-        self._build_xy_axis_class_matrices()
+        # Initialize vector cache
+        self.vector_cache = VectorCache(
+            self.xy_axis_vectors,
+            self.length_scale,
+            self.device,
+            grid_resolution=self.resolution,
+            max_size=self.cache_size
+        )
         
+        # Initialize spatial index (will be set during processing)
+        self.spatial_index = None
+        
+        # Initialize grid dimensions
+        self.grid_width = int(self.world_bounds_norm[0] / self.resolution)
+        self.grid_height = int(self.world_bounds_norm[1] / self.resolution)
+        
+        # Initialize occupancy grids
+        self.occupied_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        self.empty_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        self.class_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        
+        if self.verbose:
+            print(f"Initialized VSAMapper with grid size: {self.grid_width}x{self.grid_height}")
+            print(f"Using device: {self.device}")
+    
+    def check_memory_usage(self) -> bool:
+        """
+        Monitor GPU memory usage and clear cache if needed.
+        
+        Returns:
+            True if cache was cleared, False otherwise
+        """
+        if self.device.type == 'cuda':
+            current_memory = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
+            max_memory = torch.cuda.get_device_properties(self.device).total_memory / 1024**3  # GB
+            
+            if current_memory > self.memory_threshold * max_memory:
+                if self.verbose:
+                    print(f"Memory usage high ({current_memory:.2f}/{max_memory:.2f} GB), clearing cache")
+                
+                self.vector_cache.clear()
+                torch.cuda.empty_cache()
+                return True
+        
+        return False
+    
     def process_observation(
-        self,
-        points: torch.Tensor,
+        self, 
+        points: torch.Tensor, 
         labels: torch.Tensor
     ) -> None:
         """
@@ -122,141 +148,138 @@ class VSAMapper:
         normalized_points[:, 0] -= self.world_bounds[0]
         normalized_points[:, 1] -= self.world_bounds[2]
         
-        # Calculate quadrant memories for each new point
-        # using a multipoint L2 distance calculation
-        ups = normalized_points.unsqueeze(1)
-        qcm = self.quadrant_centers[0]
-        qcm = qcm.unsqueeze(0)
-        qcm = qcm.repeat(ups.shape[0], 1, 1)
-        dists = self.pdist(ups, qcm)
-        closest_quads = torch.argmin(dists, dim=1)
+        # Initialize adaptive spatial index
+        if self.verbose:
+            print("Initializing adaptive spatial index...")
+            
+        self.spatial_index = AdaptiveSpatialIndex(
+            normalized_points,
+            labels,
+            self.min_cell_resolution,
+            self.max_cell_resolution,
+            self.device
+        )
         
-        # Process occupied and empty points using batched operations
-        occupied_points = normalized_points[labels == 1]
-        occupied_points_closest_quads = closest_quads[labels == 1]
+        if self.verbose:
+            print(f"Processing point cloud with {points.shape[0]} points")
+            print(f"Spatial index cell size: {self.spatial_index.cell_size:.4f}")
         
+        # Process points directly using spatial grid
+        self._process_points_spatially(normalized_points, labels)
+        
+        # Update class grid based on occupied and empty grids
+        self._update_class_grid()
+        
+        # Check memory usage and clear cache if needed
+        self.check_memory_usage()
+        
+        if self.verbose:
+            cache_stats = self.vector_cache.get_cache_stats()
+            print(f"Vector cache stats: {cache_stats['hit_rate']*100:.1f}% hit rate, "
+                  f"{cache_stats['cache_size']}/{cache_stats['max_size']} entries")
+    
+    def _process_points_spatially(
+        self, 
+        points: torch.Tensor, 
+        labels: torch.Tensor
+    ) -> None:
+        """
+        Process points directly using spatial grid with optimized batch processing.
+        
+        Args:
+            points: Normalized points tensor
+            labels: Labels tensor
+        """
+        # Separate occupied and empty points
+        occupied_points = points[labels == 1]
+        empty_points = points[labels == 0]
+        
+        # Process occupied points in batches
         if len(occupied_points) > 0:
-            # Process occupied points in batches
-            batch_size = 1000  # Adjust based on GPU memory
-            num_batches = (len(occupied_points) + batch_size - 1) // batch_size
+            num_batches = (len(occupied_points) + self.batch_size - 1) // self.batch_size
             
             for i in range(num_batches):
-                start_idx = i * batch_size
-                end_idx = min((i + 1) * batch_size, len(occupied_points))
+                start_idx = i * self.batch_size
+                end_idx = min((i + 1) * self.batch_size, len(occupied_points))
                 
                 batch_points = occupied_points[start_idx:end_idx]
-                batch_quads = occupied_points_closest_quads[start_idx:end_idx]
                 
-                # Compute vectors for this batch
-                x_vectors = power(self.xy_axis_vectors[0], batch_points[:, 0], self.length_scale)
-                y_vectors = power(self.xy_axis_vectors[1], batch_points[:, 1], self.length_scale)
+                # Get vectors from cache
+                batch_vectors = self.vector_cache.get_batch_vectors(batch_points)
                 
-                # Bind vectors
-                batch_result = bind_batch([x_vectors, y_vectors], self.device)
+                # Convert points to grid coordinates
+                grid_x = torch.floor(batch_points[:, 0] / self.resolution).long()
+                grid_y = torch.floor(batch_points[:, 1] / self.resolution).long()
                 
-                # Update memory vectors
-                for j, quad_idx in enumerate(batch_quads):
-                    self.occupied_quadrant_memory_vectors[quad_idx] += batch_result[j]
+                # Ensure coordinates are within grid bounds
+                grid_x = torch.clamp(grid_x, 0, self.grid_width - 1)
+                grid_y = torch.clamp(grid_y, 0, self.grid_height - 1)
+                
+                # Update occupied grid using vectorized operations where possible
+                for j in range(len(grid_x)):
+                    x, y = grid_x[j], grid_y[j]
+                    self.occupied_grid[y, x] += 1.0
+                
+                # Check memory usage periodically
+                if (i + 1) % 10 == 0:
+                    self.check_memory_usage()
         
-        empty_points = normalized_points[labels == 0]
-        empty_points_closest_quads = closest_quads[labels == 0]
-        
+        # Process empty points in batches
         if len(empty_points) > 0:
-            # Process empty points in batches
-            batch_size = 1000  # Adjust based on GPU memory
-            num_batches = (len(empty_points) + batch_size - 1) // batch_size
+            num_batches = (len(empty_points) + self.batch_size - 1) // self.batch_size
             
             for i in range(num_batches):
-                start_idx = i * batch_size
-                end_idx = min((i + 1) * batch_size, len(empty_points))
+                start_idx = i * self.batch_size
+                end_idx = min((i + 1) * self.batch_size, len(empty_points))
                 
                 batch_points = empty_points[start_idx:end_idx]
-                batch_quads = empty_points_closest_quads[start_idx:end_idx]
                 
-                # Compute vectors for this batch
-                x_vectors = power(self.xy_axis_vectors[0], batch_points[:, 0], self.length_scale)
-                y_vectors = power(self.xy_axis_vectors[1], batch_points[:, 1], self.length_scale)
+                # Get vectors from cache
+                batch_vectors = self.vector_cache.get_batch_vectors(batch_points)
                 
-                # Bind vectors
-                batch_result = bind_batch([x_vectors, y_vectors], self.device)
+                # Convert points to grid coordinates
+                grid_x = torch.floor(batch_points[:, 0] / self.resolution).long()
+                grid_y = torch.floor(batch_points[:, 1] / self.resolution).long()
                 
-                # Update memory vectors
-                for j, quad_idx in enumerate(batch_quads):
-                    self.empty_quadrant_memory_vectors[quad_idx] += batch_result[j]
-        
-        # Calculate the probabilities of occupancy and empty for each point in the xy axis matrix
-        # Process quadrants in parallel where possible
-        
-        # Normalize memory vectors if needed
-        if self.use_query_normalization:
-            # Avoid division by zero
-            occupied_norms = torch.linalg.norm(self.occupied_quadrant_memory_vectors, dim=1)
-            occupied_norms = torch.clamp(occupied_norms, min=1e-10)
-            normalized_occupied_vectors = self.occupied_quadrant_memory_vectors / occupied_norms.unsqueeze(1)
-            
-            empty_norms = torch.linalg.norm(self.empty_quadrant_memory_vectors, dim=1)
-            empty_norms = torch.clamp(empty_norms, min=1e-10)
-            normalized_empty_vectors = self.empty_quadrant_memory_vectors / empty_norms.unsqueeze(1)
-        else:
-            normalized_occupied_vectors = self.occupied_quadrant_memory_vectors
-            normalized_empty_vectors = self.empty_quadrant_memory_vectors
-        
-        # Process quadrants
-        counter = 0
-        for j, y_lower in enumerate(self.quadrant_indices_y[:-1]):
-            for i, x_lower in enumerate(self.quadrant_indices_x[:-1]):
-                x_upper = self.quadrant_indices_x[i + 1]
-                y_upper = self.quadrant_indices_y[j + 1]
+                # Ensure coordinates are within grid bounds
+                grid_x = torch.clamp(grid_x, 0, self.grid_width - 1)
+                grid_y = torch.clamp(grid_y, 0, self.grid_height - 1)
                 
-                xy_axis_matrix_quad = self.xy_axis_matrix[x_lower:x_upper, y_lower:y_upper, :]
+                # Update empty grid using vectorized operations where possible
+                for j in range(len(grid_x)):
+                    x, y = grid_x[j], grid_y[j]
+                    self.empty_grid[y, x] += 1.0
                 
-                # Calculate occupied heatmap
-                qv_occupied = normalized_occupied_vectors[counter, :]
-                occupied_heatmap = torch.tensordot(
-                    qv_occupied,
-                    xy_axis_matrix_quad,
-                    dims=([0], [2])
-                )
-                
-                # Calculate empty heatmap
-                qv_empty = normalized_empty_vectors[counter, :]
-                empty_heatmap = torch.tensordot(
-                    qv_empty,
-                    xy_axis_matrix_quad,
-                    dims=([0], [2])
-                )
-                
-                # Normalize heatmaps
-                max_occupied = torch.max(torch.abs(occupied_heatmap))
-                if max_occupied > 0:
-                    occupied_heatmap /= max_occupied
-                
-                max_empty = torch.max(torch.abs(empty_heatmap))
-                if max_empty > 0:
-                    empty_heatmap /= max_empty
-                
-                # Update heatmaps
-                self.xy_axis_occupied_heatmap[x_lower:x_upper, y_lower:y_upper] = occupied_heatmap
-                self.xy_axis_empty_heatmap[x_lower:x_upper, y_lower:y_upper] = empty_heatmap
-                
-                counter += 1
-        
-        # Transpose and normalize final heatmaps
-        self.xy_axis_occupied_heatmap = self.xy_axis_occupied_heatmap.T
-        self.xy_axis_occupied_heatmap = torch.nan_to_num(self.xy_axis_occupied_heatmap)
-        max_occupied = torch.max(torch.abs(self.xy_axis_occupied_heatmap))
+                # Check memory usage periodically
+                if (i + 1) % 10 == 0:
+                    self.check_memory_usage()
+    
+    def _update_class_grid(self) -> None:
+        """
+        Update class grid based on occupied and empty grids.
+        """
+        # Normalize grids
+        max_occupied = torch.max(self.occupied_grid)
         if max_occupied > 0:
-            self.xy_axis_occupied_heatmap = self.xy_axis_occupied_heatmap / max_occupied
+            occupied_norm = self.occupied_grid / max_occupied
+        else:
+            occupied_norm = self.occupied_grid
         
-        self.xy_axis_empty_heatmap = self.xy_axis_empty_heatmap.T
-        self.xy_axis_empty_heatmap = torch.nan_to_num(self.xy_axis_empty_heatmap)
-        max_empty = torch.max(torch.abs(self.xy_axis_empty_heatmap))
+        max_empty = torch.max(self.empty_grid)
         if max_empty > 0:
-            self.xy_axis_empty_heatmap = self.xy_axis_empty_heatmap / max_empty
+            empty_norm = self.empty_grid / max_empty
+        else:
+            empty_norm = self.empty_grid
         
-        # Update the class matrix based on the decision thresholds
-        self._update_class_matrix()
+        # Initialize with unknown (0)
+        self.class_grid = torch.zeros_like(self.occupied_grid)
         
+        # Set occupied (1) where occupied grid > upper threshold
+        self.class_grid[occupied_norm > self.decision_thresholds[1]] = 1
+        
+        # Set empty (-1) where empty grid > upper threshold
+        self.class_grid[empty_norm > self.decision_thresholds[1]] = -1
+    
     def get_occupancy_grid(self) -> torch.Tensor:
         """
         Get the current occupancy grid.
@@ -264,7 +287,11 @@ class VSAMapper:
         Returns:
             Tensor of shape [H, W] containing occupancy probabilities
         """
-        return self.xy_axis_occupied_heatmap
+        # Normalize occupied grid
+        max_val = torch.max(self.occupied_grid)
+        if max_val > 0:
+            return self.occupied_grid / max_val
+        return self.occupied_grid
     
     def get_empty_grid(self) -> torch.Tensor:
         """
@@ -273,7 +300,11 @@ class VSAMapper:
         Returns:
             Tensor of shape [H, W] containing empty probabilities
         """
-        return self.xy_axis_empty_heatmap
+        # Normalize empty grid
+        max_val = torch.max(self.empty_grid)
+        if max_val > 0:
+            return self.empty_grid / max_val
+        return self.empty_grid
     
     def get_class_grid(self) -> torch.Tensor:
         """
@@ -282,208 +313,91 @@ class VSAMapper:
         Returns:
             Tensor of shape [H, W] containing class labels (-1=empty, 0=unknown, 1=occupied)
         """
-        return self.xy_axis_class_matrix
+        return self.class_grid
     
-    def _update_class_matrix(self) -> None:
+    def process_incrementally(
+        self, 
+        horizon_distance: float = 10.0, 
+        sample_resolution: Optional[float] = None, 
+        max_samples: Optional[int] = None
+    ) -> None:
         """
-        Update the class matrix based on the occupied and empty heatmaps.
-        """
-        # Initialize with unknown (0)
-        self.xy_axis_class_matrix = torch.zeros(
-            self.xy_axis_occupied_heatmap.shape,
-            device=self.device
-        )
-        
-        # Set occupied (1) where occupied heatmap > upper threshold
-        self.xy_axis_class_matrix[self.xy_axis_occupied_heatmap > self.decision_thresholds[1]] = 1
-        
-        # Set empty (-1) where empty heatmap > upper threshold
-        self.xy_axis_class_matrix[self.xy_axis_empty_heatmap > self.decision_thresholds[1]] = -1
-    
-    def _build_quadrant_hierarchy(self) -> None:
-        """
-        Build the quadrant hierarchy.
-        """
-        if self.verbose:
-            print("Building quadrant hierarchy...")
-        
-        for level, size in enumerate(self.quadrant_hierarchy):
-            self._build_quadrant_level(level, size)
-    
-    def _build_quadrant_level(self, level: int, size: int) -> None:
-        """
-        Build a specific level of the quadrant hierarchy.
+        Process the point cloud incrementally from sample positions with optimized memory management.
         
         Args:
-            level: The level in the hierarchy
-            size: The size of the quadrant grid
+            horizon_distance: Maximum distance from sample point to consider points
+            sample_resolution: Resolution for sampling grid (default: 10x resolution)
+            max_samples: Maximum number of sample positions to process
         """
-        # Calculate the quadrant size
-        size_x_meters = self.world_bounds_norm[0] / size
-        size_y_meters = self.world_bounds_norm[1] / size
+        if self.spatial_index is None:
+            raise ValueError("Spatial index not initialized. Call process_observation first.")
         
-        # Calculate the quadrant boundaries
-        qb_x = torch.linspace(0, self.world_bounds_norm[0], size + 1, device=self.device)
-        qb_y = torch.linspace(0, self.world_bounds_norm[1], size + 1, device=self.device)
+        if sample_resolution is None:
+            sample_resolution = self.resolution * 10
         
-        self.quadrant_axis_bounds.append((qb_x, qb_y))
+        # Generate sample positions using a grid
+        x_min, x_max = 0, self.world_bounds_norm[0]
+        y_min, y_max = 0, self.world_bounds_norm[1]
         
-        # Calculate the quadrant centers
-        qcs_x = torch.linspace(0, self.world_bounds_norm[0], 2 * size + 1, device=self.device)[1::2]
-        qcs_y = torch.linspace(0, self.world_bounds_norm[1], 2 * size + 1, device=self.device)[1::2]
+        # Calculate ranges
+        x_range = x_max - x_min
+        y_range = y_max - y_min
         
-        qcmg = torch.meshgrid(qcs_x, qcs_y, indexing="xy")
-        qcs = torch.stack(qcmg, dim=2)
-        qcs = qcs.reshape((size ** 2, 2))
-        qcs = qcs.to(self.device)
+        # Calculate number of samples in each dimension
+        nx = int(x_range / sample_resolution) + 1
+        ny = int(y_range / sample_resolution) + 1
         
-        self.quadrant_centers.append(qcs)
-    
-    def _build_quadrant_memory_hierarchy(self) -> None:
-        """
-        Build the memory hierarchy for the quadrants.
-        """
         if self.verbose:
-            print("Building quadrant memory hierarchy...")
+            print(f"Incremental processing with {nx}x{ny} sample positions")
+            print(f"Horizon distance: {horizon_distance}")
         
-        # Initialize memory vectors for occupied and empty quadrants
-        self.occupied_quadrant_memory_vectors = torch.zeros(
-            size=(
-                self.quadrant_hierarchy[0] ** self.environment_dimensionality,
-                self.vsa_dimensions
-            ),
-            device=self.device
-        )
-        self.empty_quadrant_memory_vectors = torch.clone(self.occupied_quadrant_memory_vectors)
-    
-    def _build_quadrant_indices(self) -> None:
-        """
-        Build the quadrant indices based on the quadrant axis bounds.
-        """
-        if self.verbose:
-            print("Building quadrant indices...")
+        # Generate grid of sample positions
+        x_positions = torch.linspace(x_min, x_max, nx, device=self.device)
+        y_positions = torch.linspace(y_min, y_max, ny, device=self.device)
         
-        quadrant_indices_x = self.quadrant_axis_bounds[0][0] / self.axis_resolution
-        quadrant_indices_y = self.quadrant_axis_bounds[0][1] / self.axis_resolution
+        # Create meshgrid of positions
+        xx, yy = torch.meshgrid(x_positions, y_positions, indexing="ij")
+        positions = torch.stack([xx.flatten(), yy.flatten()], dim=1)
         
-        self.quadrant_indices_x = quadrant_indices_x.to(torch.int)
-        self.quadrant_indices_y = quadrant_indices_y.to(torch.int)
-    
-    def _build_xy_axis_linspace(self) -> None:
-        """
-        Build the x and y axis linspace for the XY axis.
-        """
-        if self.verbose:
-            print("Building XY axis linspace...")
-        
-        xal_steps = int(self.world_bounds_norm[0] / self.axis_resolution)
-        yal_steps = int(self.world_bounds_norm[1] / self.axis_resolution)
-        
-        xa = torch.linspace(
-            start=0,
-            end=self.world_bounds_norm[0],
-            steps=(2 * xal_steps + 1),
-            device=self.device
-        )
-        ya = torch.linspace(
-            start=0,
-            end=self.world_bounds_norm[1],
-            steps=(2 * yal_steps + 1),
-            device=self.device
-        )
-        
-        # Extract the centers from the axis linspace
-        xac = xa[1::2]
-        yac = ya[1::2]
-        
-        self.xy_axis_linspace = (xac, yac)
-    
-    def _build_xy_axis_vectors(self) -> None:
-        """
-        Build the XY axis vectors using the SSP generator.
-        """
-        if self.verbose:
-            print("Building XY axis vectors...")
-        
-        self.xy_axis_vectors = self.ssp_generator.generate(
-            self.environment_dimensionality
-        )
-    
-    def _build_xy_axis_matrix(self) -> None:
-        """
-        Build the XY axis matrix using GPU acceleration.
-        """
-        if self.verbose:
-            print("Building XY axis matrix...")
-
-        x_shape = self.xy_axis_linspace[0].shape[0]
-        y_shape = self.xy_axis_linspace[1].shape[0]
-
-        # Create a meshgrid of all x,y coordinates
-        x_coords = self.xy_axis_linspace[0].unsqueeze(1).repeat(1, y_shape)
-        y_coords = self.xy_axis_linspace[1].unsqueeze(0).repeat(x_shape, 1)
-        
-        # Reshape to [num_points, 2]
-        coords = torch.stack([x_coords.flatten(), y_coords.flatten()], dim=1)
-        
-        # Process in batches to avoid GPU memory issues
-        batch_size = 1000  # Reduced batch size to avoid OOM errors
-        num_batches = (coords.shape[0] + batch_size - 1) // batch_size
-        
-        # Initialize the output matrix
-        self.xy_axis_matrix = torch.zeros(
-            (x_shape, y_shape, self.vsa_dimensions),
-            device=self.device
-        )
-        
-        for i in range(num_batches):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, coords.shape[0])
-            batch_coords = coords[start_idx:end_idx]
+        # Limit number of samples if specified
+        if max_samples is not None and max_samples < positions.shape[0]:
+            if self.verbose:
+                print(f"Limiting to {max_samples} sample positions")
             
-            # Compute vectors for this batch
-            x_vectors = power(self.xy_axis_vectors[0], batch_coords[:, 0], self.length_scale)
-            y_vectors = power(self.xy_axis_vectors[1], batch_coords[:, 1], self.length_scale)
+            # Randomly select positions
+            indices = torch.randperm(positions.shape[0], device=self.device)[:max_samples]
+            positions = positions[indices]
+        
+        # Reset grids
+        self.occupied_grid.zero_()
+        self.empty_grid.zero_()
+        
+        # Process each sample position
+        total_points_processed = 0
+        
+        for i, position in enumerate(positions):
+            # Query points within horizon distance
+            points, labels = self.spatial_index.query_range(position, horizon_distance)
             
-            # Bind vectors
-            batch_result = bind_batch([x_vectors, y_vectors], self.device)
+            if points.shape[0] > 0:
+                # Process these points
+                self._process_points_spatially(points, labels)
+                total_points_processed += points.shape[0]
             
-            # Place results in the output matrix
-            batch_indices = torch.arange(start_idx, end_idx, device=self.device)
-            x_indices = batch_indices // y_shape
-            y_indices = batch_indices % y_shape
+            # Check memory usage periodically
+            if (i + 1) % 10 == 0:
+                self.check_memory_usage()
             
-            for j in range(len(batch_indices)):
-                self.xy_axis_matrix[x_indices[j], y_indices[j], :] = batch_result[j]
+            if self.verbose and (i + 1) % 10 == 0:
+                print(f"Processed {i + 1}/{positions.shape[0]} sample positions, "
+                      f"{total_points_processed} total points")
+        
+        # Update the class grid
+        self._update_class_grid()
+        
+        # Clear vector cache to free memory
+        self.vector_cache.clear()
         
         if self.verbose:
-            print("Finished building XY axis matrix.")
-    
-    def _build_xy_axis_heatmaps(self) -> None:
-        """
-        Build the XY axis heatmaps.
-        """
-        if self.verbose:
-            print("Building XY axis heatmaps...")
-        
-        self.xy_axis_occupied_heatmap = torch.zeros(
-            (self.xy_axis_matrix.shape[0], self.xy_axis_matrix.shape[1]),
-            device=self.device
-        )
-        
-        self.xy_axis_empty_heatmap = torch.zeros(
-            (self.xy_axis_matrix.shape[0], self.xy_axis_matrix.shape[1]),
-            device=self.device
-        )
-    
-    def _build_xy_axis_class_matrices(self) -> None:
-        """
-        Build the XY axis class matrices.
-        """
-        if self.verbose:
-            print("Building XY axis class matrices...")
-        
-        self.xy_axis_class_matrix = torch.zeros(
-            (self.xy_axis_matrix.shape[0], self.xy_axis_matrix.shape[1]),
-            device=self.device
-        )
+            print(f"Incremental processing complete. Processed {total_points_processed} points "
+                  f"from {positions.shape[0]} sample positions")

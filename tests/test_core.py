@@ -69,13 +69,15 @@ def test_vsa_mapper():
     config = {
         "world_bounds": world_bounds,
         "resolution": resolution,
-        "axis_resolution": 0.2,
+        "min_cell_resolution": resolution * 5,
+        "max_cell_resolution": resolution * 20,
         "vsa_dimensions": 1000,  # Use smaller dimensions for testing
-        "quadrant_hierarchy": [2],  # Use smaller hierarchy for testing
         "length_scale": 2.0,
-        "use_query_normalization": True,
         "decision_thresholds": [-0.99, 0.99],
-        "verbose": True
+        "verbose": True,
+        "batch_size": 100,
+        "cache_size": 1000,
+        "memory_threshold": 0.8
     }
     
     # Use CPU for testing to ensure compatibility

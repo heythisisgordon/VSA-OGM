@@ -34,13 +34,15 @@ def test_cuda_only():
     config = {
         "world_bounds": world_bounds,
         "resolution": 0.1,
-        "axis_resolution": 0.5,
+        "min_cell_resolution": 0.5,
+        "max_cell_resolution": 2.0,
         "vsa_dimensions": 8000,  # Reduced dimensions to avoid OOM errors
-        "quadrant_hierarchy": [4],
         "length_scale": 2.0,
-        "use_query_normalization": True,
         "decision_thresholds": [-0.99, 0.99],
-        "verbose": True
+        "verbose": True,
+        "batch_size": 1000,
+        "cache_size": 10000,
+        "memory_threshold": 0.8
     }
     
     # Test with CUDA

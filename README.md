@@ -1,4 +1,4 @@
-# VSA-OGM - Occupancy Grid Mapping in 2D
+# VSA-OGM - Optimized Occupancy Grid Mapping in 2D
 
 In this application of bio-inspired vector symbolic architectures, we employ a novel hyperdimensional occupancy grid mapping system with Shannon entropy. For the most in-depth exploration of our experiments and results, please take a look at [our paper](https://arxiv.org/pdf/2408.09066).
 
@@ -33,6 +33,30 @@ pointcloud_to_ogm(
 )
 ```
 
+### Advanced Features
+
+VSA-OGM now includes optimized processing with adaptive spatial indexing, vector caching, and incremental processing:
+
+```python
+from vsa_ogm import pointcloud_to_ogm
+
+# Convert a point cloud to an occupancy grid map with incremental processing
+pointcloud_to_ogm(
+    input_file="inputs/obstacle_map.npy",
+    output_file="outputs/incremental_grid.npz",
+    world_bounds=[-50, 50, -50, 50],
+    resolution=0.1,
+    incremental=True,                # Enable incremental processing
+    horizon_distance=10.0,           # Maximum distance from sample points
+    sample_resolution=1.0,           # Resolution for sampling grid
+    max_samples=100,                 # Maximum number of sample positions
+    batch_size=1000,                 # Batch size for processing points
+    cache_size=10000,                # Maximum size of vector cache
+    memory_threshold=0.8,            # Threshold for GPU memory usage
+    verbose=True
+)
+```
+
 ### Command Line Interface
 
 VSA-OGM also provides a command-line interface:
@@ -40,6 +64,9 @@ VSA-OGM also provides a command-line interface:
 ```bash
 # After installing the package
 vsa-ogm inputs/obstacle_map.npy outputs/obstacle_grid.npz --verbose
+
+# With incremental processing
+vsa-ogm inputs/obstacle_map.npy outputs/incremental_grid.npz --incremental --horizon 10.0 --verbose
 ```
 
 Or you can run the module directly:
@@ -62,6 +89,8 @@ python examples/basic_usage.py
   - **main.py**: Main entry point with function-based API
   - **mapper.py**: Core VSA-OGM algorithm implementation
   - **functional.py**: Vector operations for VSA-OGM
+  - **spatial.py**: Adaptive spatial indexing for efficient point queries
+  - **cache.py**: Vector caching for optimized computation
   - **io.py**: Input/output functions
   - **utils.py**: Utility functions
 - **examples**: Example scripts demonstrating usage
