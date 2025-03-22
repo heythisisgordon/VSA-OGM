@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import modules from src directory
 from src.mapper import VSAMapper
-from io import load_pointcloud, save_occupancy_grid, convert_occupancy_grid_to_pointcloud
+from src.io import load_pointcloud, save_occupancy_grid, convert_occupancy_grid_to_pointcloud
 from src.utils import visualize_occupancy_grid, visualize_class_grid
 
 def test_io_functions():

@@ -3,8 +3,8 @@ from setuptools import setup, find_packages
 setup(
     name="vsa_ogm",
     version="0.1.0",
-    package_dir={"": "src"},
-    packages=[""],
+    package_dir={"vsa_ogm": "src"},
+    packages=["vsa_ogm"],
     install_requires=[
         "matplotlib",
         "numpy",
@@ -20,7 +20,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "vsa-ogm=main:cli_main",
+            "vsa-ogm=vsa_ogm.main:cli_main",
         ],
     },
     python_requires=">=3.8",

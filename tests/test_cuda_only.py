@@ -7,10 +7,10 @@ import os
 import sys
 
 # Add the parent directory to the path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vsa_ogm.mapper import VSAMapper
-from vsa_ogm.io import load_pointcloud
+from src.mapper import VSAMapper
+from src.io import load_pointcloud
 
 def test_cuda_only():
     """Test CUDA-only acceleration for VSA-OGM."""
