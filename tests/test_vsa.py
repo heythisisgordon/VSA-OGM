@@ -15,7 +15,8 @@ from src.mapper import VSAMapper
 from src.spatial import AdaptiveSpatialIndex
 from src.cache import VectorCache
 from src.io import load_pointcloud, save_occupancy_grid, convert_occupancy_grid_to_pointcloud
-from src.utils import visualize_occupancy_grid, visualize_class_grid
+from src.utils import visualize_occupancy_grid, visualize_class_grid, visualize_entropy_grid, visualize_entropy_comparison
+import src.utils as utils
 
 def test_adaptive_spatial_index():
     """
@@ -585,8 +586,8 @@ def test_vector_cache_lru():
     
     # Check that the oldest entries were removed
     # Create keys for the first two points
-    key1 = cache._discretize_point(torch.tensor([0.0, 0.0], device=device))
-    key2 = cache._discretize_point(torch.tensor([1.0, 1.0], device=device))
+    key1 = (0, 0)  # Discretized key for [0.0, 0.0]
+    key2 = (10, 10)  # Discretized key for [1.0, 1.0]
     
     # These should not be in the cache anymore
     if key1 in cache.cache:

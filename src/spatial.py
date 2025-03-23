@@ -35,6 +35,13 @@ class AdaptiveSpatialIndex:
         self.points = points
         self.labels = labels
         
+        # Handle empty point cloud
+        if points.shape[0] == 0:
+            self.cell_size = min_resolution
+            self.grid = {}
+            self.cell_indices = torch.zeros((0, 2), device=device).long()
+            return
+        
         # Determine optimal cell size based on point density
         self.cell_size = self._optimize_cell_size(points, min_resolution, max_resolution)
         
