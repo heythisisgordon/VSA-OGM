@@ -1,5 +1,22 @@
 # VSA-OGM - Optimized Occupancy Grid Mapping in 2D
 
+## Program Summary
+
+VSA-OGM is a high-performance library for creating occupancy grid maps from 2D point clouds using Vector Symbolic Architecture (VSA) and hyperdimensional computing. It transforms raw point cloud data into probabilistic occupancy grid maps that represent the environment as a grid of cells, each with a probability of being occupied or empty. This is an adaptation of the original VSA-OGM work to operate on a single, final 2D point cloud by ingesting sequential segments of the point cloud and processing them in a manner that emulates a robot with lidar traversing the same environment.
+
+Key features include:
+- **Adaptive Spatial Indexing**: Efficiently query points within spatial regions
+- **Optimized Vector Caching**: Reduce redundant computation with LRU-like caching
+- **Incremental Processing**: Process point clouds in smaller chunks to reduce memory usage
+- **Shannon Entropy Feature Extraction**: Enhance feature detection in noisy environments
+- **Memory-Aware Processing**: Monitor and manage memory usage to avoid out-of-memory errors
+- **Comprehensive Visualization**: Generate visualizations of occupancy grids and entropy maps
+- **GPU Acceleration**: Leverage CUDA for faster processing when available
+
+VSA-OGM is designed for robotics, autonomous navigation, and mapping applications where efficient and accurate environment representation is crucial.
+
+## Background
+
 In this application of bio-inspired vector symbolic architectures, we employ a novel hyperdimensional occupancy grid mapping system with Shannon entropy. For the most in-depth exploration of our experiments and results, please take a look at [our paper](https://arxiv.org/pdf/2408.09066).
 
 *This work was supported under grant 5.21 from the University of Michigan's Automotive Research Center (ARC) and the U.S. Army's Ground Vehicle Systems Center (GVSC).* 
@@ -100,19 +117,76 @@ Check out the `examples` directory for more usage examples:
 python examples/basic_usage.py
 ```
 
+## Comprehensive Documentation
+
+VSA-OGM now includes comprehensive documentation to help you get the most out of the library:
+
+- [**API Reference**](docs/api.md): Detailed documentation of all classes and methods
+- [**Usage Examples**](docs/examples.md): Examples of how to use VSA-OGM for various tasks
+- [**Performance Guidelines**](docs/performance.md): Guidelines for optimizing performance
+
+## Testing and Benchmarking
+
+VSA-OGM includes comprehensive testing and benchmarking capabilities:
+
+### Unit Tests
+
+Run the unit tests to verify the correctness of the implementation:
+
+```bash
+python -m tests.test_vsa
+```
+
+### Integration Tests
+
+Run the integration tests to verify the end-to-end functionality:
+
+```bash
+python -m tests.test_integration
+```
+
+### Performance Benchmarking
+
+Run the benchmarking scripts to evaluate performance with different parameters:
+
+```bash
+python -m tests.benchmark
+```
+
+This will generate benchmark visualizations in the `outputs/benchmark` directory.
+
+## Performance Optimization
+
+VSA-OGM provides several parameters that can be tuned to optimize performance. For detailed guidelines, see the [Performance Guidelines](docs/performance.md).
+
+Key parameters for performance optimization include:
+
+- **VSA Dimensions**: Reduce for faster processing, increase for better accuracy
+- **Batch Size**: Increase for better GPU utilization
+- **Cache Size**: Increase for better hit rate
+- **Incremental Processing**: Use for large point clouds to reduce memory usage
+- **Shannon Entropy Parameters**: Adjust disk radii for different feature extraction quality
+
 ## Directory Structure
 
 - **src**: Core package with the VSA-OGM implementation
   - **main.py**: Main entry point with function-based API
-  - **mapper.py**: Core VSA-OGM algorithm implementation
+  - **mapper.py**: Core VSA-OGM algorithm implementation with Shannon entropy
   - **functional.py**: Vector operations for VSA-OGM
   - **spatial.py**: Adaptive spatial indexing for efficient point queries
   - **cache.py**: Vector caching for optimized computation
   - **io.py**: Input/output functions
-  - **utils.py**: Utility functions
+  - **utils.py**: Utility functions including visualization
 - **examples**: Example scripts demonstrating usage
-- **tests**: Unit tests
-- **docs**: Documentation and refactoring plans
+- **tests**: 
+  - **test_vsa.py**: Unit tests for VSA-OGM components
+  - **test_integration.py**: Integration tests for end-to-end functionality
+  - **benchmark.py**: Performance benchmarking scripts
+- **docs**: 
+  - **api.md**: API reference documentation
+  - **examples.md**: Usage examples
+  - **performance.md**: Performance guidelines
+  - **refactoring/**: Refactoring plans and implementation details
 
 ## Datasets
 
