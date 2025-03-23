@@ -13,13 +13,13 @@ Phase 6: Comprehensive Testing and Documentation
 
 ## Phase 5 Focus: Main Interface and CLI Updates
 
-In this phase, we will update the main interface and command-line interface (CLI) to support the enhanced VSA mapper with Shannon entropy and provide access to its new features. This will ensure that users can easily leverage the improved functionality through both the API and the command line.
+In this phase, we will update the main interface and command-line interface (CLI) to support the enhanced VSA mapper with Shannon entropy and provide access to its new features. This will ensure that users can easily leverage the improved functionality through the API and the command line.
 
 ### Current Implementation Analysis
 
-The current main interface in `src/main.py` provides a function `pointcloud_to_ogm` and a CLI entry point `cli_main`, but they only support the original `VSAMapper` class. The interface needs to be updated to:
-- Support both the original and enhanced mappers
-- Provide access to the new features of the enhanced mapper
+The current main interface in `src/main.py` provides a function `pointcloud_to_ogm` and a CLI entry point `cli_main`, but they need to be updated to:
+- Directly integrate with the enhanced VSAMapper class
+- Provide access to the Shannon entropy features
 - Include options for Shannon entropy parameters
 - Support visualization of entropy grids
 
@@ -49,7 +49,6 @@ def pointcloud_to_ogm(
     safety_margin: float = 0.5,
     occupied_disk_radius: int = 2,
     empty_disk_radius: int = 4,
-    use_enhanced_mapper: bool = False,
     save_entropy_grids: bool = False,
     save_stats: bool = False,
     visualize: bool = False
@@ -78,7 +77,6 @@ def pointcloud_to_ogm(
         safety_margin: Minimum distance from occupied points for sampling
         occupied_disk_radius: Radius for occupied disk filter in entropy calculation
         empty_disk_radius: Radius for empty disk filter in entropy calculation
-        use_enhanced_mapper: Whether to use the enhanced mapper with Shannon entropy
         save_entropy_grids: Whether to save entropy grids
         save_stats: Whether to save processing statistics
         visualize: Whether to visualize results
@@ -136,17 +134,11 @@ def pointcloud_to_ogm(
         "empty_disk_radius": empty_disk_radius
     }
     
-    # Create appropriate mapper based on use_enhanced_mapper flag
-    if use_enhanced_mapper:
-        if verbose:
-            print("Initializing EnhancedVSAMapper...")
-        
-        mapper = EnhancedVSAMapper(config, device=device)
-    else:
-        if verbose:
-            print("Initializing VSAMapper...")
-        
-        mapper = VSAMapper(config, device=device)
+    # Initialize VSA mapper
+    if verbose:
+        print("Initializing VSAMapper...")
+    
+    mapper = VSAMapper(config, device=device)
     
     # Process point cloud
     if verbose:
@@ -159,21 +151,12 @@ def pointcloud_to_ogm(
         if verbose:
             print("Processing incrementally...")
         
-        if use_enhanced_mapper:
-            # Enhanced mapper supports safety margin
-            mapper.process_incrementally(
-                horizon_distance=horizon_distance,
-                sample_resolution=sample_resolution,
-                max_samples=max_samples,
-                safety_margin=safety_margin
-            )
-        else:
-            # Original mapper doesn't support safety margin
-            mapper.process_incrementally(
-                horizon_distance=horizon_distance,
-                sample_resolution=sample_resolution,
-                max_samples=max_samples
-            )
+        mapper.process_incrementally(
+            horizon_distance=horizon_distance,
+            sample_resolution=sample_resolution,
+            max_samples=max_samples,
+            safety_margin=safety_margin
+        )
     
     # Calculate processing time
     processing_time = time.time() - start_time
@@ -193,30 +176,24 @@ def pointcloud_to_ogm(
         "horizon_distance": horizon_distance if incremental else None,
         "sample_resolution": sample_resolution if incremental else None,
         "processing_time": processing_time,
-        "use_enhanced_mapper": use_enhanced_mapper
+        "occupied_disk_radius": occupied_disk_radius,
+        "empty_disk_radius": empty_disk_radius
     }
     
-    # Add entropy parameters if using enhanced mapper
-    if use_enhanced_mapper:
-        metadata.update({
-            "occupied_disk_radius": occupied_disk_radius,
-            "empty_disk_radius": empty_disk_radius
-        })
+    # Get entropy grids if requested
+    if save_entropy_grids:
+        occupied_entropy = mapper.get_occupied_entropy_grid()
+        empty_entropy = mapper.get_empty_entropy_grid()
+        global_entropy = mapper.get_global_entropy_grid()
         
-        # Get entropy grids if requested
-        if save_entropy_grids:
-            occupied_entropy = mapper.get_occupied_entropy_grid()
-            empty_entropy = mapper.get_empty_entropy_grid()
-            global_entropy = mapper.get_global_entropy_grid()
-            
-            metadata.update({
-                "occupied_entropy": occupied_entropy.cpu().numpy(),
-                "empty_entropy": empty_entropy.cpu().numpy(),
-                "global_entropy": global_entropy.cpu().numpy()
-            })
+        metadata.update({
+            "occupied_entropy": occupied_entropy.cpu().numpy(),
+            "empty_entropy": empty_entropy.cpu().numpy(),
+            "global_entropy": global_entropy.cpu().numpy()
+        })
     
-    # Add enhanced mapper statistics if available
-    if use_enhanced_mapper and save_stats:
+    # Add mapper statistics if requested
+    if save_stats:
         stats = mapper.get_stats()
         metadata["stats"] = stats
     
@@ -241,69 +218,71 @@ def pointcloud_to_ogm(
         if verbose:
             print(f"Visualization saved to {visualize_file}")
         
-        # Visualize class grid if available
-        try:
-            class_grid = mapper.get_class_grid()
-            class_file = os.path.splitext(output_file)[0] + "_class.png"
-            utils.visualize_class_grid(
-                grid=class_grid,
-                output_file=class_file,
-                world_bounds=world_bounds,
-                show=False
-            )
-            
-            if verbose:
-                print(f"Class grid visualization saved to {class_file}")
-        except:
-            if verbose:
-                print("Class grid visualization not available")
+        # Visualize class grid
+        class_grid = mapper.get_class_grid()
+        class_file = os.path.splitext(output_file)[0] + "_class.png"
+        utils.visualize_class_grid(
+            grid=class_grid,
+            output_file=class_file,
+            world_bounds=world_bounds,
+            show=False
+        )
         
-        # Visualize entropy grids if using enhanced mapper
-        if use_enhanced_mapper:
-            try:
-                # Get entropy grids
-                occupied_entropy = mapper.get_occupied_entropy_grid()
-                empty_entropy = mapper.get_empty_entropy_grid()
-                global_entropy = mapper.get_global_entropy_grid()
-                
-                # Visualize occupied entropy
-                occupied_entropy_file = os.path.splitext(output_file)[0] + "_occupied_entropy.png"
-                utils.visualize_occupancy_grid(
-                    grid=occupied_entropy,
-                    output_file=occupied_entropy_file,
-                    world_bounds=world_bounds,
-                    colormap="plasma",
-                    show=False
-                )
-                
-                # Visualize empty entropy
-                empty_entropy_file = os.path.splitext(output_file)[0] + "_empty_entropy.png"
-                utils.visualize_occupancy_grid(
-                    grid=empty_entropy,
-                    output_file=empty_entropy_file,
-                    world_bounds=world_bounds,
-                    colormap="plasma",
-                    show=False
-                )
-                
-                # Visualize global entropy
-                global_entropy_file = os.path.splitext(output_file)[0] + "_global_entropy.png"
-                utils.visualize_occupancy_grid(
-                    grid=global_entropy,
-                    output_file=global_entropy_file,
-                    world_bounds=world_bounds,
-                    colormap="viridis",
-                    show=False
-                )
-                
-                if verbose:
-                    print(f"Entropy visualizations saved to:")
-                    print(f"  - {occupied_entropy_file}")
-                    print(f"  - {empty_entropy_file}")
-                    print(f"  - {global_entropy_file}")
-            except:
-                if verbose:
-                    print("Entropy grid visualizations not available")
+        if verbose:
+            print(f"Class grid visualization saved to {class_file}")
+        
+        # Visualize entropy grids
+        occupied_entropy = mapper.get_occupied_entropy_grid()
+        empty_entropy = mapper.get_empty_entropy_grid()
+        global_entropy = mapper.get_global_entropy_grid()
+        
+        # Visualize occupied entropy
+        occupied_entropy_file = os.path.splitext(output_file)[0] + "_occupied_entropy.png"
+        utils.visualize_entropy_grid(
+            grid=occupied_entropy,
+            output_file=occupied_entropy_file,
+            world_bounds=world_bounds,
+            colormap="plasma",
+            show=False
+        )
+        
+        # Visualize empty entropy
+        empty_entropy_file = os.path.splitext(output_file)[0] + "_empty_entropy.png"
+        utils.visualize_entropy_grid(
+            grid=empty_entropy,
+            output_file=empty_entropy_file,
+            world_bounds=world_bounds,
+            colormap="plasma",
+            show=False
+        )
+        
+        # Visualize global entropy
+        global_entropy_file = os.path.splitext(output_file)[0] + "_global_entropy.png"
+        utils.visualize_entropy_grid(
+            grid=global_entropy,
+            output_file=global_entropy_file,
+            world_bounds=world_bounds,
+            colormap="viridis",
+            show=False
+        )
+        
+        # Create entropy comparison visualization
+        entropy_comparison_file = os.path.splitext(output_file)[0] + "_entropy_comparison.png"
+        utils.visualize_entropy_comparison(
+            occupied_entropy=occupied_entropy,
+            empty_entropy=empty_entropy,
+            global_entropy=global_entropy,
+            output_file=entropy_comparison_file,
+            world_bounds=world_bounds,
+            show=False
+        )
+        
+        if verbose:
+            print(f"Entropy visualizations saved to:")
+            print(f"  - {occupied_entropy_file}")
+            print(f"  - {empty_entropy_file}")
+            print(f"  - {global_entropy_file}")
+            print(f"  - {entropy_comparison_file}")
     
     if verbose:
         print(f"Occupancy grid saved to {output_file}")
@@ -311,22 +290,14 @@ def pointcloud_to_ogm(
     # Prepare result dictionary
     result = {
         "grid": grid,
+        "class_grid": class_grid,
+        "occupied_entropy": mapper.get_occupied_entropy_grid(),
+        "empty_entropy": mapper.get_empty_entropy_grid(),
+        "global_entropy": mapper.get_global_entropy_grid(),
         "metadata": metadata,
-        "processing_time": processing_time
+        "processing_time": processing_time,
+        "stats": mapper.get_stats()
     }
-    
-    # Add class grid
-    result["class_grid"] = mapper.get_class_grid()
-    
-    # Add entropy grids if using enhanced mapper
-    if use_enhanced_mapper:
-        result["occupied_entropy"] = mapper.get_occupied_entropy_grid()
-        result["empty_entropy"] = mapper.get_empty_entropy_grid()
-        result["global_entropy"] = mapper.get_global_entropy_grid()
-    
-    # Add enhanced mapper statistics if available
-    if use_enhanced_mapper:
-        result["stats"] = mapper.get_stats()
     
     return result
 ```
@@ -360,8 +331,7 @@ def cli_main() -> None:
     parser.add_argument("--memory-threshold", type=float, default=0.8, help="Threshold for GPU memory usage (0.0-1.0)")
     parser.add_argument("--safety-margin", type=float, default=0.5, help="Minimum distance from occupied points for sampling")
     
-    # Enhanced mapper options
-    parser.add_argument("--enhanced", "-e", action="store_true", help="Use enhanced mapper with Shannon entropy")
+    # Shannon entropy options
     parser.add_argument("--occupied-disk-radius", type=int, default=2, help="Radius for occupied disk filter in entropy calculation")
     parser.add_argument("--empty-disk-radius", type=int, default=4, help="Radius for empty disk filter in entropy calculation")
     parser.add_argument("--save-entropy-grids", action="store_true", help="Save entropy grids in output file")
@@ -392,28 +362,64 @@ def cli_main() -> None:
         safety_margin=args.safety_margin,
         occupied_disk_radius=args.occupied_disk_radius,
         empty_disk_radius=args.empty_disk_radius,
-        use_enhanced_mapper=args.enhanced,
         save_entropy_grids=args.save_entropy_grids,
         save_stats=args.save_stats,
         visualize=args.visualize
     )
 ```
 
-3. **Enhanced Example Script**
+3. **Basic Example Script**
 
 ```python
-def enhanced_example():
-    """Run an example using the enhanced VSA mapper with Shannon entropy."""
+def basic_example():
+    """Run a basic example using the VSA mapper."""
     # Input and output files
     input_file = "inputs/obstacle_map.npy"
-    output_file = "outputs/enhanced_grid.npz"
+    output_file = "outputs/basic_grid.npz"
     
     # Create outputs directory if it doesn't exist
     os.makedirs("outputs", exist_ok=True)
     
-    print("\n=== Example: Enhanced VSA Mapper with Shannon Entropy ===\n")
+    print("\n=== Basic VSA Mapper Example ===\n")
     
-    # Convert a point cloud to an occupancy grid map using the enhanced mapper
+    # Convert a point cloud to an occupancy grid map
+    result = pointcloud_to_ogm(
+        input_file=input_file,
+        output_file=output_file,
+        world_bounds=[-50, 50, -50, 50],
+        resolution=0.1,
+        incremental=False,
+        visualize=True,
+        verbose=True
+    )
+    
+    # Print statistics
+    stats = result["stats"]
+    print("\n=== VSA Mapper Statistics ===")
+    print(f"Total time: {stats['total_time']:.2f} seconds")
+    print(f"Process time: {stats['process_time']:.2f} seconds")
+    print(f"Total points processed: {stats['total_points_processed']}")
+    print(f"Points per second: {stats['points_per_second']:.2f}")
+    print(f"Cache hit rate: {stats['cache_hit_rate']*100:.2f}%")
+    
+    return result
+```
+
+4. **Incremental Example Script**
+
+```python
+def incremental_example():
+    """Run an example using incremental processing."""
+    # Input and output files
+    input_file = "inputs/obstacle_map.npy"
+    output_file = "outputs/incremental_grid.npz"
+    
+    # Create outputs directory if it doesn't exist
+    os.makedirs("outputs", exist_ok=True)
+    
+    print("\n=== Incremental Processing Example ===\n")
+    
+    # Convert a point cloud to an occupancy grid map using incremental processing
     result = pointcloud_to_ogm(
         input_file=input_file,
         output_file=output_file,
@@ -423,40 +429,26 @@ def enhanced_example():
         horizon_distance=10.0,
         sample_resolution=1.0,
         max_samples=100,
-        batch_size=1000,
-        cache_size=10000,
-        memory_threshold=0.8,
         safety_margin=0.5,
-        occupied_disk_radius=2,
-        empty_disk_radius=4,
-        use_enhanced_mapper=True,
-        save_entropy_grids=True,
-        save_stats=True,
         visualize=True,
         verbose=True
     )
     
     # Print statistics
-    if "stats" in result:
-        stats = result["stats"]
-        print("\n=== Enhanced VSA Mapper Statistics ===")
-        print(f"Total time: {stats['total_time']:.2f} seconds")
-        print(f"Process time: {stats['process_time']:.2f} seconds")
-        print(f"Incremental time: {stats['incremental_time']:.2f} seconds")
-        print(f"Total points processed: {stats['total_points_processed']}")
-        print(f"Total samples processed: {stats['total_samples_processed']}")
-        print(f"Points per second: {stats['points_per_second']:.2f}")
-        print(f"Cache hit rate: {stats['cache_hit_rate']*100:.2f}%")
-        print(f"Occupied disk radius: {stats['occupied_disk_radius']}")
-        print(f"Empty disk radius: {stats['empty_disk_radius']}")
-        
-        if "current_memory_gb" in stats:
-            print(f"Memory usage: {stats['current_memory_gb']:.2f} GB / {stats['max_memory_gb']:.2f} GB")
+    stats = result["stats"]
+    print("\n=== VSA Mapper Statistics ===")
+    print(f"Total time: {stats['total_time']:.2f} seconds")
+    print(f"Process time: {stats['process_time']:.2f} seconds")
+    print(f"Incremental time: {stats['incremental_time']:.2f} seconds")
+    print(f"Total points processed: {stats['total_points_processed']}")
+    print(f"Total samples processed: {stats['total_samples_processed']}")
+    print(f"Points per second: {stats['points_per_second']:.2f}")
+    print(f"Cache hit rate: {stats['cache_hit_rate']*100:.2f}%")
     
     return result
 ```
 
-4. **Entropy Performance Comparison Script**
+5. **Entropy Parameter Comparison Script**
 
 ```python
 def compare_entropy_parameters():
@@ -499,7 +491,6 @@ def compare_entropy_parameters():
             max_samples=100,
             occupied_disk_radius=occupied_radius,
             empty_disk_radius=empty_radius,
-            use_enhanced_mapper=True,
             save_entropy_grids=True,
             save_stats=True,
             visualize=True,
@@ -509,7 +500,7 @@ def compare_entropy_parameters():
         # Store results
         results[param_str] = {
             "processing_time": result["processing_time"],
-            "stats": result["stats"] if "stats" in result else None
+            "stats": result["stats"]
         }
         
         # Create comparison visualization
@@ -555,115 +546,6 @@ def compare_entropy_parameters():
     return results
 ```
 
-5. **Original vs Enhanced Mapper Comparison Script**
-
-```python
-def compare_mappers():
-    """Compare the performance of the original and enhanced VSA mappers."""
-    # Input and output files
-    input_file = "inputs/obstacle_map.npy"
-    original_output = "outputs/original_grid.npz"
-    enhanced_output = "outputs/enhanced_grid.npz"
-    
-    # Create outputs directory if it doesn't exist
-    os.makedirs("outputs", exist_ok=True)
-    
-    print("\n=== Comparing Original and Enhanced VSA Mappers ===\n")
-    
-    # Process with original mapper
-    print("\n--- Original VSA Mapper ---\n")
-    original_result = pointcloud_to_ogm(
-        input_file=input_file,
-        output_file=original_output,
-        world_bounds=[-50, 50, -50, 50],
-        resolution=0.1,
-        incremental=True,
-        horizon_distance=10.0,
-        sample_resolution=1.0,
-        max_samples=100,
-        use_enhanced_mapper=False,
-        visualize=True,
-        verbose=True
-    )
-    
-    # Process with enhanced mapper
-    print("\n--- Enhanced VSA Mapper ---\n")
-    enhanced_result = pointcloud_to_ogm(
-        input_file=input_file,
-        output_file=enhanced_output,
-        world_bounds=[-50, 50, -50, 50],
-        resolution=0.1,
-        incremental=True,
-        horizon_distance=10.0,
-        sample_resolution=1.0,
-        max_samples=100,
-        occupied_disk_radius=2,
-        empty_disk_radius=4,
-        use_enhanced_mapper=True,
-        save_entropy_grids=True,
-        save_stats=True,
-        visualize=True,
-        verbose=True
-    )
-    
-    # Print performance comparison
-    print("\n=== Performance Comparison ===\n")
-    print(f"Original processing time: {original_result['processing_time']:.2f} seconds")
-    print(f"Enhanced processing time: {enhanced_result['processing_time']:.2f} seconds")
-    
-    # Calculate speedup/slowdown
-    speedup = original_result['processing_time'] / enhanced_result['processing_time']
-    if speedup > 1:
-        print(f"Enhanced mapper is {speedup:.2f}x faster than original mapper")
-    else:
-        print(f"Enhanced mapper is {1/speedup:.2f}x slower than original mapper")
-    
-    # Compare class grids
-    original_class_grid = original_result["class_grid"]
-    enhanced_class_grid = enhanced_result["class_grid"]
-    
-    # Count classes in original grid
-    original_occupied = torch.sum(original_class_grid == 1).item()
-    original_empty = torch.sum(original_class_grid == -1).item()
-    original_unknown = torch.sum(original_class_grid == 0).item()
-    
-    # Count classes in enhanced grid
-    enhanced_occupied = torch.sum(enhanced_class_grid == 1).item()
-    enhanced_empty = torch.sum(enhanced_class_grid == -1).item()
-    enhanced_unknown = torch.sum(enhanced_class_grid == 0).item()
-    
-    # Print class distribution comparison
-    print("\n=== Class Distribution Comparison ===\n")
-    print(f"Original mapper: {original_occupied} occupied, {original_empty} empty, {original_unknown} unknown")
-    print(f"Enhanced mapper: {enhanced_occupied} occupied, {enhanced_empty} empty, {enhanced_unknown} unknown")
-    
-    # Calculate difference in certainty (percentage of known voxels)
-    total_voxels = original_class_grid.numel()
-    original_certainty = 100.0 * (original_occupied + original_empty) / total_voxels
-    enhanced_certainty = 100.0 * (enhanced_occupied + enhanced_empty) / total_voxels
-    
-    print(f"\nOriginal mapper certainty: {original_certainty:.2f}%")
-    print(f"Enhanced mapper certainty: {enhanced_certainty:.2f}%")
-    
-    if enhanced_certainty > original_certainty:
-        print(f"Enhanced mapper provides {enhanced_certainty - original_certainty:.2f}% more certainty")
-    else:
-        print(f"Original mapper provides {original_certainty - enhanced_certainty:.2f}% more certainty")
-    
-    # Print enhanced mapper statistics
-    if "stats" in enhanced_result:
-        stats = enhanced_result["stats"]
-        print("\n=== Enhanced VSA Mapper Statistics ===")
-        print(f"Total time: {stats['total_time']:.2f} seconds")
-        print(f"Process time: {stats['process_time']:.2f} seconds")
-        print(f"Incremental time: {stats['incremental_time']:.2f} seconds")
-        print(f"Total points processed: {stats['total_points_processed']}")
-        print(f"Points per second: {stats['points_per_second']:.2f}")
-        print(f"Cache hit rate: {stats['cache_hit_rate']*100:.2f}%")
-    
-    return original_result, enhanced_result
-```
-
 6. **Updated Main Module**
 
 ```python
@@ -679,24 +561,19 @@ def main():
         
         # Ask user which example to run
         print("\nAvailable examples:")
-        print("1. Original VSA mapper")
-        print("2. Enhanced VSA mapper with Shannon entropy")
-        print("3. Compare original and enhanced mappers")
-        print("4. Compare different Shannon entropy parameters")
+        print("1. Basic processing")
+        print("2. Incremental processing")
+        print("3. Compare different Shannon entropy parameters")
         
-        choice = input("\nEnter your choice (1-4, or 0 to exit): ")
+        choice = input("\nEnter your choice (1-3, or 0 to exit): ")
         
         if choice == "1":
-            # Run original mapper example
-            from . import examples
-            examples.basic_example()
+            # Run basic example
+            basic_example()
         elif choice == "2":
-            # Run enhanced mapper example
-            enhanced_example()
+            # Run incremental example
+            incremental_example()
         elif choice == "3":
-            # Run comparison example
-            compare_mappers()
-        elif choice == "4":
             # Run entropy parameter comparison
             compare_entropy_parameters()
         elif choice == "0":
@@ -853,24 +730,15 @@ def visualize_entropy_comparison(
 
 The updated main interface and CLI will be integrated into the existing codebase by:
 1. Updating `src/main.py` with the new `pointcloud_to_ogm` function and `cli_main` function
-2. Adding the enhanced example scripts to `examples/enhanced_usage.py`
-3. Adding the additional utility functions for entropy visualization to `src/utils.py`
-4. Ensuring backward compatibility with existing code that uses the original interface
+2. Adding the example scripts to `examples/usage.py`
+3. Adding the utility functions for entropy visualization to `src/utils.py`
 
 ### Implementation Notes
 
-This phase focuses on updating the main interface and CLI to support the enhanced VSA mapper with Shannon entropy. The key enhancements include:
+This phase focuses on updating the main interface and CLI to directly integrate with the enhanced VSA mapper. The key enhancements include:
 
-1. **Support for Both Mappers**: The updated interface supports both the original and enhanced mappers through the `use_enhanced_mapper` parameter.
+1. **Direct Integration**: The interface directly uses the enhanced VSAMapper class without maintaining backward compatibility with a legacy implementation.
 
 2. **Shannon Entropy Parameters**: The interface provides options to configure the Shannon entropy parameters, such as the disk radii for occupied and empty regions.
 
 3. **Entropy Grid Visualization**: The interface adds support for visualizing the entropy grids, including the occupied entropy, empty entropy, and global entropy.
-
-4. **Performance Comparison**: The example scripts provide tools for comparing the performance of the original and enhanced mappers, as well as testing different Shannon entropy parameters.
-
-These updates ensure that users can easily access and configure the enhanced functionality provided by the Shannon entropy-based feature extraction, while maintaining backward compatibility with existing code.
-
-### Next Steps
-
-After implementing the updated main interface and CLI, we will proceed to Phase 6, which will focus on comprehensive testing and documentation to ensure the enhanced VSA-OGM implementation is robust and user-friendly.

@@ -5,7 +5,7 @@
 The overall task is to implement a Grid-Based Sequential VSA-OGM mapping pipeline that treats each sampling point like a robot pose keyframe. This approach processes the point cloud incrementally, focusing on local points within sensor range at each sampling location, rather than processing the entire point cloud at once. The implementation will include:
 
 Phase 1: Adaptive Spatial Indexing Implementation (Current Phase)
-Phase 2: Optimized Vector Caching Implementation
+Phase 2: Simplified Vector Caching Implementation 
 Phase 3: Enhanced VSA Mapper Implementation - Core Structure
 Phase 4: Shannon Entropy Feature Extraction Implementation
 Phase 5: Main Interface and CLI Updates
@@ -13,7 +13,7 @@ Phase 6: Comprehensive Testing and Documentation
 
 ## Phase 1 Focus: Adaptive Spatial Indexing
 
-In this phase, we will focus on implementing an enhanced version of the `AdaptiveSpatialIndex` class that optimizes spatial queries for point clouds. This component is critical for efficient incremental processing as it enables fast retrieval of points within a given radius of a sample position.
+In this phase, we will focus on enhancing the existing `AdaptiveSpatialIndex` class in `src/spatial.py` to optimize spatial queries for point clouds and add new functionality for region safety checking. This component is critical for efficient incremental processing as it enables fast retrieval of points within a given radius of a sample position.
 
 ### Current Implementation Analysis
 
@@ -21,145 +21,18 @@ The current `AdaptiveSpatialIndex` class in `src/spatial.py` provides basic spat
 - Fixed cell size calculation that doesn't fully adapt to point density
 - Limited optimization for range queries
 - No explicit handling of very large point clouds
+- No support for region safety checking
 
 ### Implementation Plan
 
-1. **Enhanced AdaptiveSpatialIndex Class**
+1. **Enhance Existing AdaptiveSpatialIndex Class**
+
+We will directly modify the existing `AdaptiveSpatialIndex` class in `src/spatial.py` to add the necessary functionality. The existing methods will be optimized and a new method for region safety checking will be added.
+
+2. **Add Region Safety Check Method**
 
 ```python
-class AdaptiveSpatialIndex:
-    def __init__(self, points, labels, min_resolution, max_resolution, device):
-        """
-        Initialize an adaptive grid-based spatial index.
-        
-        Args:
-            points: Tensor of shape [N, 2] containing point coordinates
-            labels: Tensor of shape [N] containing point labels (0=empty, 1=occupied)
-            min_resolution: Minimum resolution of the grid cells
-            max_resolution: Maximum resolution of the grid cells
-            device: Device to store tensors on
-        """
-        self.device = device
-        self.points = points
-        self.labels = labels
-        
-        # Determine optimal cell size based on point density
-        self.cell_size = self._optimize_cell_size(points, min_resolution, max_resolution)
-        
-        if isinstance(points, np.ndarray):
-            points = torch.from_numpy(points).float().to(device)
-        
-        if points.device != device:
-            points = points.to(device)
-        
-        # Compute grid cell indices for each point
-        self.cell_indices = torch.floor(points / self.cell_size).long()
-        
-        # Create dictionary mapping from cell indices to point indices
-        self.grid = {}
-        for i, (x, y) in enumerate(self.cell_indices):
-            key = (x.item(), y.item())
-            if key not in self.grid:
-                self.grid[key] = []
-            self.grid[key].append(i)
-```
-
-2. **Optimized Cell Size Calculation**
-
-```python
-def _optimize_cell_size(self, points, min_resolution, max_resolution):
-    """
-    Determine optimal cell size based on point distribution.
-    
-    Args:
-        points: Tensor of shape [N, 2] containing point coordinates
-        min_resolution: Minimum resolution of the grid cells
-        max_resolution: Maximum resolution of the grid cells
-        
-    Returns:
-        Appropriate cell size
-    """
-    # Calculate point density
-    if isinstance(points, torch.Tensor):
-        x_min, y_min = points.min(dim=0).values
-        x_max, y_max = points.max(dim=0).values
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-    else:  # numpy array
-        x_min, y_min = points.min(axis=0)
-        x_max, y_max = points.max(axis=0)
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-    
-    area = x_range * y_range
-    point_density = points.shape[0] / area if area > 0 else 1.0
-    
-    # Calculate adaptive cell size based on point density
-    # Higher density -> smaller cells, lower density -> larger cells
-    # We aim for approximately 10-50 points per cell on average
-    target_points_per_cell = 25
-    point_density_tensor = torch.tensor(point_density, device=self.device)
-    ideal_cell_size = torch.sqrt(target_points_per_cell / point_density_tensor)
-    
-    # Clamp to min/max resolution
-    cell_size = torch.clamp(ideal_cell_size, min=min_resolution, max=max_resolution)
-    
-    return cell_size.item()
-```
-
-3. **Optimized Range Query with Squared Distances**
-
-```python
-def query_range(self, center, radius):
-    """
-    Find all points within a given radius of center using squared distances.
-    
-    Args:
-        center: [x, y] coordinates of query center
-        radius: Search radius
-        
-    Returns:
-        Tuple of (points, labels) tensors for points within the radius
-    """
-    # Convert center to tensor if it's not already
-    if not isinstance(center, torch.Tensor):
-        center = torch.tensor(center, device=self.device)
-    
-    # Calculate cell range to search (using squared distances)
-    squared_radius = radius * radius
-    radius_cells = int(radius / self.cell_size) + 1
-    center_cell = torch.floor(center / self.cell_size).long()
-    
-    # Collect point indices from relevant cells
-    indices = []
-    for i in range(-radius_cells, radius_cells + 1):
-        for j in range(-radius_cells, radius_cells + 1):
-            key = (center_cell[0].item() + i, center_cell[1].item() + j)
-            if key in self.grid:
-                indices.extend(self.grid[key])
-    
-    if not indices:
-        return torch.zeros((0, 2), device=self.device), torch.zeros(0, device=self.device)
-    
-    # Get candidate points
-    candidate_indices = torch.tensor(indices, device=self.device)
-    candidate_points = self.points[candidate_indices]
-    
-    # Compute squared distances efficiently
-    squared_diffs = candidate_points - center.unsqueeze(0)
-    squared_distances = torch.sum(squared_diffs * squared_diffs, dim=1)
-    
-    # Filter points within radius using squared distance
-    mask = squared_distances <= squared_radius
-    result_indices = candidate_indices[mask]
-    
-    return self.points[result_indices], self.labels[result_indices]
-```
-
-4. **Region Safety Check for Sample Position Validation**
-
-```python
-def is_region_free(self, bounds, safety_margin):
+def is_region_free(self, bounds: List[float], safety_margin: float) -> bool:
     """
     Check if a region is free of occupied points with a safety margin.
     
@@ -207,11 +80,17 @@ def is_region_free(self, bounds, safety_margin):
 
 ### Testing Plan
 
-1. **Unit Tests for AdaptiveSpatialIndex**
+1. **Update Existing Tests**
+
+We will update the existing tests in `tests/test_vsa.py` to test the enhanced functionality of the `AdaptiveSpatialIndex` class, including the new `is_region_free` method.
 
 ```python
 def test_adaptive_spatial_index():
-    """Test the enhanced AdaptiveSpatialIndex class."""
+    """
+    Test the AdaptiveSpatialIndex class.
+    """
+    print("Testing AdaptiveSpatialIndex...")
+    
     # Create a test point cloud
     points = torch.tensor([
         [0.0, 0.0],
@@ -259,18 +138,27 @@ def test_adaptive_spatial_index():
     # Test region safety check
     bounds = [0.4, 0.6, 0.4, 0.6]  # Small region around center
     
-    # With small safety margin, should be free
+    # With small safety margin, should be free (center point is not occupied)
     assert spatial_index.is_region_free(bounds, 0.1)
     
     # With large safety margin, should not be free (occupied points nearby)
     assert not spatial_index.is_region_free(bounds, 0.5)
+    
+    print("AdaptiveSpatialIndex tests passed!")
+    return True
 ```
 
-2. **Performance Tests**
+2. **Add Performance Tests**
+
+We will add performance tests to measure the efficiency of the enhanced `AdaptiveSpatialIndex` class, particularly for large point clouds.
 
 ```python
 def test_spatial_index_performance():
-    """Test the performance of the AdaptiveSpatialIndex class."""
+    """
+    Test the performance of the AdaptiveSpatialIndex class.
+    """
+    print("Testing spatial index performance...")
+    
     # Create a larger test point cloud
     n_points = 10000
     points = torch.rand((n_points, 2)) * 100  # Random points in 100x100 area
@@ -322,11 +210,21 @@ def test_spatial_index_performance():
     
     # Verify results match
     assert query_points.shape[0] == brute_force_points.shape[0]
+    
+    # Test region safety check performance
+    bounds = [45.0, 55.0, 45.0, 55.0]  # 10x10 region around center
+    safety_margin = 5.0
+    
+    start_time = time.time()
+    is_free = spatial_index.is_region_free(bounds, safety_margin)
+    region_check_time = time.time() - start_time
+    
+    print(f"Region safety check time: {region_check_time:.4f} seconds")
+    print(f"Region is {'free' if is_free else 'not free'}")
+    
+    print("Spatial index performance tests passed!")
+    return True
 ```
-
-### Integration with Existing Code
-
-The enhanced `AdaptiveSpatialIndex` class will be a drop-in replacement for the current implementation in `src/spatial.py`. It maintains the same interface but provides improved performance and additional functionality.
 
 ### Expected Outcomes
 
@@ -336,4 +234,4 @@ The enhanced `AdaptiveSpatialIndex` class will be a drop-in replacement for the 
 
 ### Next Steps
 
-After implementing the enhanced spatial indexing, we will proceed to Phase 2, which will focus on optimizing vector caching for efficient VSA operations.
+After enhancing the spatial indexing functionality, we will proceed to Phase 2, which will focus on optimizing vector caching for efficient VSA operations.

@@ -23,20 +23,21 @@ def test_adaptive_spatial_index():
     """
     print("Testing AdaptiveSpatialIndex...")
     
-    # Create a small test grid
-    grid = np.zeros((10, 10), dtype=np.int32)
-    grid[4:7, 4:7] = 1  # Add a small square in the middle
+    # Create a test point cloud
+    points = torch.tensor([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [0.5, 0.5]
+    ])
     
-    # Convert to point cloud
-    world_bounds = [0, 1, 0, 1]
-    resolution = 0.1
-    
-    points, labels = convert_occupancy_grid_to_pointcloud(grid, world_bounds, resolution)
+    labels = torch.tensor([0, 1, 0, 1, 0])
     
     # Create spatial index
     device = torch.device("cpu")
-    min_resolution = 0.05
-    max_resolution = 0.2
+    min_resolution = 0.1
+    max_resolution = 1.0
     
     spatial_index = AdaptiveSpatialIndex(
         points,
@@ -46,16 +47,42 @@ def test_adaptive_spatial_index():
         device
     )
     
+    # Test cell size calculation
+    assert spatial_index.cell_size >= min_resolution
+    assert spatial_index.cell_size <= max_resolution
+    
     print(f"Created spatial index with cell size: {spatial_index.cell_size}")
     
     # Test range query
-    center = torch.tensor([0.5, 0.5], device=device)
-    radius = 0.3
+    center = torch.tensor([0.5, 0.5])
+    radius = 0.6
     
     query_points, query_labels = spatial_index.query_range(center, radius)
     
-    print(f"Range query returned {query_points.shape[0]} points")
+    # Should return all points (all within 0.6 of center)
+    assert query_points.shape[0] == 5
+    print(f"Range query with radius {radius} returned {query_points.shape[0]} points")
     
+    # Test with smaller radius
+    radius = 0.3
+    query_points, query_labels = spatial_index.query_range(center, radius)
+    
+    # Should only return the center point
+    assert query_points.shape[0] == 1
+    print(f"Range query with radius {radius} returned {query_points.shape[0]} points")
+    
+    # Test region safety check
+    bounds = [0.4, 0.6, 0.4, 0.6]  # Small region around center
+    
+    # With small safety margin, should be free (center point is not occupied)
+    assert spatial_index.is_region_free(bounds, 0.1)
+    print(f"Region safety check with margin 0.1: region is free")
+    
+    # With large safety margin, should not be free (occupied points nearby)
+    assert not spatial_index.is_region_free(bounds, 0.5)
+    print(f"Region safety check with margin 0.5: region is not free")
+    
+    print("AdaptiveSpatialIndex tests passed!")
     return True
 
 def test_vector_cache():
@@ -316,12 +343,85 @@ def test_performance_comparison():
     
     return True
 
+def test_spatial_index_performance():
+    """
+    Test the performance of the AdaptiveSpatialIndex class.
+    """
+    print("Testing spatial index performance...")
+    
+    # Create a larger test point cloud
+    n_points = 10000
+    points = torch.rand((n_points, 2)) * 100  # Random points in 100x100 area
+    labels = torch.randint(0, 2, (n_points,))  # Random labels
+    
+    # Create spatial index
+    device = torch.device("cpu")
+    min_resolution = 1.0
+    max_resolution = 10.0
+    
+    start_time = time.time()
+    spatial_index = AdaptiveSpatialIndex(
+        points,
+        labels,
+        min_resolution,
+        max_resolution,
+        device
+    )
+    init_time = time.time() - start_time
+    
+    print(f"Initialization time: {init_time:.4f} seconds")
+    print(f"Cell size: {spatial_index.cell_size:.4f}")
+    
+    # Test range query performance
+    center = torch.tensor([50.0, 50.0])
+    radius = 10.0
+    
+    start_time = time.time()
+    query_points, query_labels = spatial_index.query_range(center, radius)
+    query_time = time.time() - start_time
+    
+    print(f"Range query time: {query_time:.4f} seconds")
+    print(f"Found {query_points.shape[0]} points within radius {radius}")
+    
+    # Compare with brute force approach
+    start_time = time.time()
+    diffs = points - center
+    distances = torch.sqrt(torch.sum(diffs * diffs, dim=1))
+    mask = distances <= radius
+    brute_force_points = points[mask]
+    brute_force_time = time.time() - start_time
+    
+    print(f"Brute force time: {brute_force_time:.4f} seconds")
+    print(f"Found {brute_force_points.shape[0]} points within radius {radius}")
+    
+    # Calculate speedup
+    speedup = brute_force_time / query_time
+    print(f"Speedup: {speedup:.2f}x")
+    
+    # Verify results match
+    assert query_points.shape[0] == brute_force_points.shape[0]
+    
+    # Test region safety check performance
+    bounds = [45.0, 55.0, 45.0, 55.0]  # 10x10 region around center
+    safety_margin = 5.0
+    
+    start_time = time.time()
+    is_free = spatial_index.is_region_free(bounds, safety_margin)
+    region_check_time = time.time() - start_time
+    
+    print(f"Region safety check time: {region_check_time:.4f} seconds")
+    print(f"Region is {'free' if is_free else 'not free'}")
+    
+    print("Spatial index performance tests passed!")
+    return True
+
 def run_all_tests():
     """
     Run all tests.
     """
     tests = [
         test_adaptive_spatial_index,
+        test_spatial_index_performance,
         test_vector_cache,
         test_vsa_mapper,
         test_performance_comparison

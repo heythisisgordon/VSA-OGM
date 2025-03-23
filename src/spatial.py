@@ -9,7 +9,8 @@ class AdaptiveSpatialIndex:
     Adaptive grid-based spatial index for efficient point cloud processing.
     
     This class implements an adaptive grid-based spatial index that adjusts
-    cell size based on point density for efficient range queries.
+    cell size based on point density for efficient range queries and provides
+    functionality for region safety checking.
     """
     
     def __init__(
@@ -137,3 +138,48 @@ class AdaptiveSpatialIndex:
         result_indices = candidate_indices[mask]
         
         return self.points[result_indices], self.labels[result_indices]
+    
+    def is_region_free(self, bounds: List[float], safety_margin: float) -> bool:
+        """
+        Check if a region is free of occupied points with a safety margin.
+        
+        Args:
+            bounds: Region bounds [x_min, x_max, y_min, y_max]
+            safety_margin: Minimum distance from occupied points
+            
+        Returns:
+            True if region is free, False otherwise
+        """
+        # Expand bounds by safety margin
+        expanded_bounds = [
+            bounds[0] - safety_margin,
+            bounds[1] + safety_margin,
+            bounds[2] - safety_margin,
+            bounds[3] + safety_margin
+        ]
+        
+        # Find all cells that intersect with the expanded bounds
+        min_cell_x = int(expanded_bounds[0] / self.cell_size)
+        max_cell_x = int(expanded_bounds[1] / self.cell_size) + 1
+        min_cell_y = int(expanded_bounds[2] / self.cell_size)
+        max_cell_y = int(expanded_bounds[3] / self.cell_size) + 1
+        
+        # Check all cells in the expanded bounds
+        for cell_x in range(min_cell_x, max_cell_x):
+            for cell_y in range(min_cell_y, max_cell_y):
+                key = (cell_x, cell_y)
+                if key in self.grid:
+                    # Check if any occupied points are within safety margin
+                    for idx in self.grid[key]:
+                        if self.labels[idx] == 1:  # Occupied point
+                            point = self.points[idx]
+                            
+                            # Calculate minimum distance to bounds
+                            dx = max(bounds[0] - point[0], 0, point[0] - bounds[1])
+                            dy = max(bounds[2] - point[1], 0, point[1] - bounds[3])
+                            dist = (dx**2 + dy**2)**0.5
+                            
+                            if dist < safety_margin:
+                                return False
+    
+        return True
