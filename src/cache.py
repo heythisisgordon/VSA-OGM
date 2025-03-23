@@ -84,10 +84,16 @@ class VectorCache:
             for idx, i in enumerate(missing_indices):
                 key_tuple = (keys[i][0].item(), keys[i][1].item())
                 
-                # Simple cache management: if cache is full, don't add new items
-                if len(self.cache) < self.max_size:
-                    self.cache[key_tuple] = missing_vectors[idx]
+                # Simple LRU-like cache management: if cache is full, remove oldest items
+                if len(self.cache) >= self.max_size:
+                    # Remove first item (approximate LRU)
+                    oldest_key = next(iter(self.cache))
+                    del self.cache[oldest_key]
                 
+                # Add new item to cache
+                self.cache[key_tuple] = missing_vectors[idx]
+                
+                # Update result
                 result[i] = missing_vectors[idx]
         
         return result
@@ -114,5 +120,47 @@ class VectorCache:
     def clear(self) -> None:
         """Clear the cache to free memory"""
         self.cache = {}
-        self.cache_hits = 0
-        self.cache_misses = 0
+        # Keep statistics for monitoring
+    
+    def precompute_grid_vectors(self, bounds: List[float], resolution: float) -> None:
+        """
+        Precompute vectors for a grid of points.
+        
+        Args:
+            bounds: World bounds [x_min, x_max, y_min, y_max]
+            resolution: Grid resolution
+        """
+        import numpy as np
+        
+        x_min, x_max, y_min, y_max = bounds
+        
+        # Create grid of points
+        x_range = np.arange(x_min, x_max + resolution, resolution)
+        y_range = np.arange(y_min, y_max + resolution, resolution)
+        
+        # Limit grid size to avoid memory issues
+        max_points = 10000
+        if len(x_range) * len(y_range) > max_points:
+            # Sample points instead of full grid
+            num_x = min(len(x_range), int(np.sqrt(max_points * len(x_range) / len(y_range))))
+            num_y = min(len(y_range), int(np.sqrt(max_points * len(y_range) / len(x_range))))
+            
+            x_indices = np.linspace(0, len(x_range) - 1, num_x, dtype=int)
+            y_indices = np.linspace(0, len(y_range) - 1, num_y, dtype=int)
+            
+            x_range = x_range[x_indices]
+            y_range = y_range[y_indices]
+        
+        # Create meshgrid
+        xx, yy = np.meshgrid(x_range, y_range)
+        points = np.stack([xx.flatten(), yy.flatten()], axis=1)
+        
+        # Convert to tensor
+        points_tensor = torch.tensor(points, dtype=torch.float32, device=self.device)
+        
+        # Compute vectors
+        self.get_batch_vectors(points_tensor)
+        
+        # Print statistics
+        stats = self.get_cache_stats()
+        print(f"Precomputed {stats['cache_size']} vectors")

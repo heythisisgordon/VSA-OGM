@@ -37,6 +37,8 @@ class VSAMapper:
                 - cache_size: Maximum size of vector cache
                 - memory_threshold: Threshold for GPU memory usage (0.0-1.0)
                 - decision_thresholds: Thresholds for decision making
+                - occupied_disk_radius: Radius for occupied disk filter in entropy calculation
+                - empty_disk_radius: Radius for empty disk filter in entropy calculation
             device: Device to use for computation
         """
         # Set device
@@ -54,6 +56,10 @@ class VSAMapper:
         self.memory_threshold = config.get("memory_threshold", 0.8)  # 80% by default
         self.verbose = config.get("verbose", False)
         self.decision_thresholds = config.get("decision_thresholds", [-0.99, 0.99])
+        
+        # Shannon entropy parameters
+        self.occupied_disk_radius = config.get("occupied_disk_radius", 2)
+        self.empty_disk_radius = config.get("empty_disk_radius", 4)
         
         # Calculate normalized world bounds
         self.world_bounds_norm = (
@@ -92,9 +98,25 @@ class VSAMapper:
         self.empty_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
         self.class_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
         
+        # Initialize entropy grids
+        self.occupied_entropy_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        self.empty_entropy_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        self.global_entropy_grid = torch.zeros((self.grid_height, self.grid_width), device=self.device)
+        
+        # Add statistics tracking
+        self.stats = {
+            "init_time": time.time(),
+            "process_time": 0.0,
+            "incremental_time": 0.0,
+            "total_points_processed": 0,
+            "total_samples_processed": 0,
+            "memory_usage": []
+        }
+        
         if self.verbose:
             print(f"Initialized VSAMapper with grid size: {self.grid_width}x{self.grid_height}")
             print(f"Using device: {self.device}")
+            print(f"Shannon entropy disk radii: occupied={self.occupied_disk_radius}, empty={self.empty_disk_radius}")
     
     def check_memory_usage(self) -> bool:
         """
@@ -107,6 +129,9 @@ class VSAMapper:
             current_memory = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
             max_memory = torch.cuda.get_device_properties(self.device).total_memory / 1024**3  # GB
             
+            # Record memory usage
+            self.stats["memory_usage"].append((time.time(), current_memory, max_memory))
+            
             if current_memory > self.memory_threshold * max_memory:
                 if self.verbose:
                     print(f"Memory usage high ({current_memory:.2f}/{max_memory:.2f} GB), clearing cache")
@@ -117,18 +142,200 @@ class VSAMapper:
         
         return False
     
+    def _create_disk_filter(self, radius: int) -> torch.Tensor:
+        """
+        Create a disk filter for Shannon entropy calculation.
+        
+        Args:
+            radius: Radius of the disk filter in voxels
+            
+        Returns:
+            Binary disk filter as a tensor
+        """
+        diameter = 2 * radius + 1
+        center = radius
+        
+        # Create grid coordinates
+        y, x = torch.meshgrid(
+            torch.arange(diameter, device=self.device),
+            torch.arange(diameter, device=self.device),
+            indexing="ij"
+        )
+        
+        # Calculate squared distance from center
+        squared_distance = (x - center) ** 2 + (y - center) ** 2
+        
+        # Create disk filter (1 inside disk, 0 outside)
+        disk = (squared_distance <= radius ** 2).float()
+        
+        return disk
+    
+    def _shannon_entropy(self, probabilities: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate Shannon entropy of probability values.
+        
+        Args:
+            probabilities: Tensor of probability values (0.0-1.0)
+            
+        Returns:
+            Entropy values
+        """
+        # Avoid log(0) by adding a small epsilon
+        epsilon = 1e-10
+        
+        # Ensure probabilities are valid (between 0 and 1)
+        probabilities = torch.clamp(probabilities, epsilon, 1.0 - epsilon)
+        
+        # Calculate entropy: -p*log2(p) - (1-p)*log2(1-p)
+        entropy = -probabilities * torch.log2(probabilities) - (1 - probabilities) * torch.log2(1 - probabilities)
+        
+        return entropy
+    
+    def _normalize_grid(self, grid: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize a grid to the range [0, 1].
+        
+        Args:
+            grid: Grid to normalize
+            
+        Returns:
+            Normalized grid
+        """
+        # Get min and max values
+        min_val = torch.min(grid)
+        max_val = torch.max(grid)
+        
+        # Normalize grid
+        if max_val > min_val:
+            normalized_grid = (grid - min_val) / (max_val - min_val)
+        else:
+            normalized_grid = torch.zeros_like(grid)
+        
+        return normalized_grid
+    
+    def _apply_local_entropy(self, probability_grid: torch.Tensor, disk_filter: torch.Tensor) -> torch.Tensor:
+        """
+        Apply local Shannon entropy calculation with disk filter.
+        
+        Args:
+            probability_grid: Grid of probability values
+            disk_filter: Disk filter to use for local entropy calculation
+            
+        Returns:
+            Grid of local entropy values
+        """
+        # Get disk dimensions
+        filter_height, filter_width = disk_filter.shape
+        padding_y = filter_height // 2
+        padding_x = filter_width // 2
+        
+        # Pad probability grid
+        padded_grid = torch.nn.functional.pad(
+            probability_grid,
+            (padding_x, padding_x, padding_y, padding_y),
+            mode='constant',
+            value=0
+        )
+        
+        # Initialize entropy grid
+        entropy_grid = torch.zeros_like(probability_grid)
+        
+        # Apply disk filter to each position
+        for y in range(self.grid_height):
+            for x in range(self.grid_width):
+                # Extract local region
+                local_region = padded_grid[y:y + filter_height, x:x + filter_width]
+                
+                # Apply disk filter
+                masked_region = local_region * disk_filter
+                
+                # Count non-zero elements in mask
+                num_elements = torch.sum(disk_filter).item()
+                
+                # Calculate mean probability within disk
+                if num_elements > 0:
+                    mean_prob = torch.sum(masked_region) / num_elements
+                else:
+                    mean_prob = 0.0
+                
+                # Calculate entropy
+                entropy_grid[y, x] = self._shannon_entropy(torch.tensor([mean_prob], device=self.device)).item()
+        
+        return entropy_grid
+    
+    def _apply_shannon_entropy(self) -> None:
+        """
+        Apply Shannon entropy-based feature extraction as described in the paper.
+        
+        This method implements the Shannon entropy approach described in the paper:
+        1. Convert quasi-probabilities to true probabilities using the Born rule
+        2. Apply disk filters to compute local entropy for both occupied and empty grids
+        3. Calculate global entropy as the difference between occupied and empty entropy
+        """
+        if self.verbose:
+            print("Applying Shannon entropy-based feature extraction...")
+        
+        # Create disk filters
+        occupied_disk = self._create_disk_filter(self.occupied_disk_radius)
+        empty_disk = self._create_disk_filter(self.empty_disk_radius)
+        
+        # Normalize occupied and empty grids to get probability maps
+        occupied_prob = self._normalize_grid(self.occupied_grid)
+        empty_prob = self._normalize_grid(self.empty_grid)
+        
+        # Apply Born rule: true probability = squared quasi-probability
+        occupied_prob = occupied_prob ** 2
+        empty_prob = empty_prob ** 2
+        
+        # Calculate local entropy for occupied and empty grids
+        self.occupied_entropy_grid = self._apply_local_entropy(occupied_prob, occupied_disk)
+        self.empty_entropy_grid = self._apply_local_entropy(empty_prob, empty_disk)
+        
+        # Calculate global entropy as the difference between occupied and empty entropy
+        self.global_entropy_grid = self.occupied_entropy_grid - self.empty_entropy_grid
+        
+        if self.verbose:
+            print("Shannon entropy-based feature extraction completed")
+    
+    def _update_class_grid_from_entropy(self) -> None:
+        """
+        Update class grid based on Shannon entropy values as described in the paper.
+        
+        This method implements the classification approach described in the paper,
+        using the global entropy grid to classify each voxel as occupied, empty, or unknown.
+        """
+        # Initialize with unknown (0)
+        self.class_grid = torch.zeros_like(self.global_entropy_grid)
+        
+        # Set occupied (1) where global entropy is above upper threshold
+        self.class_grid[self.global_entropy_grid > self.decision_thresholds[1]] = 1
+        
+        # Set empty (-1) where global entropy is below lower threshold
+        self.class_grid[self.global_entropy_grid < self.decision_thresholds[0]] = -1
+        
+        if self.verbose:
+            occupied_count = torch.sum(self.class_grid == 1).item()
+            empty_count = torch.sum(self.class_grid == -1).item()
+            unknown_count = torch.sum(self.class_grid == 0).item()
+            
+            print(f"Class grid updated from entropy: {occupied_count} occupied, "
+                  f"{empty_count} empty, {unknown_count} unknown voxels")
+    
     def process_observation(
         self, 
         points: torch.Tensor, 
         labels: torch.Tensor
     ) -> None:
         """
-        Process a point cloud observation.
+        Process a point cloud observation with memory monitoring and Shannon entropy.
         
         Args:
             points: Tensor of shape [N, 2] containing point coordinates
             labels: Tensor of shape [N] containing point labels (0=empty, 1=occupied)
         """
+        # Record start time
+        start_time = time.time()
+        
         # Convert to torch tensors if needed
         if isinstance(points, np.ndarray):
             points = torch.from_numpy(points).float()
@@ -167,16 +374,24 @@ class VSAMapper:
         # Process points directly using spatial grid
         self._process_points_spatially(normalized_points, labels)
         
-        # Update class grid based on occupied and empty grids
-        self._update_class_grid()
+        # Apply Shannon entropy for feature extraction
+        self._apply_shannon_entropy()
+        
+        # Update class grid based on entropy values
+        self._update_class_grid_from_entropy()
         
         # Check memory usage and clear cache if needed
         self.check_memory_usage()
+        
+        # Update statistics
+        self.stats["process_time"] += time.time() - start_time
+        self.stats["total_points_processed"] += points.shape[0]
         
         if self.verbose:
             cache_stats = self.vector_cache.get_cache_stats()
             print(f"Vector cache stats: {cache_stats['hit_rate']*100:.1f}% hit rate, "
                   f"{cache_stats['cache_size']}/{cache_stats['max_size']} entries")
+            print(f"Processing completed in {time.time() - start_time:.2f} seconds")
     
     def _process_points_spatially(
         self, 
@@ -319,7 +534,8 @@ class VSAMapper:
         self, 
         horizon_distance: float = 10.0, 
         sample_resolution: Optional[float] = None, 
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        safety_margin: float = 0.5
     ) -> None:
         """
         Process the point cloud incrementally from sample positions with optimized memory management.
@@ -328,7 +544,11 @@ class VSAMapper:
             horizon_distance: Maximum distance from sample point to consider points
             sample_resolution: Resolution for sampling grid (default: 10x resolution)
             max_samples: Maximum number of sample positions to process
+            safety_margin: Minimum distance from occupied points for sampling
         """
+        # Record start time
+        start_time = time.time()
+        
         if self.spatial_index is None:
             raise ValueError("Spatial index not initialized. Call process_observation first.")
         
@@ -358,6 +578,28 @@ class VSAMapper:
         # Create meshgrid of positions
         xx, yy = torch.meshgrid(x_positions, y_positions, indexing="ij")
         positions = torch.stack([xx.flatten(), yy.flatten()], dim=1)
+        
+        # Filter out positions that are too close to occupied points
+        if safety_margin > 0:
+            valid_positions = []
+            for position in positions:
+                # Create a small region around the sample point
+                bounds = [
+                    position[0].item() - sample_resolution/2,
+                    position[0].item() + sample_resolution/2,
+                    position[1].item() - sample_resolution/2,
+                    position[1].item() + sample_resolution/2
+                ]
+                
+                # Check if region is free of occupied points
+                if self.spatial_index.is_region_free(bounds, safety_margin):
+                    valid_positions.append(position)
+            
+            if valid_positions:
+                positions = torch.stack(valid_positions)
+            
+            if self.verbose:
+                print(f"Filtered to {positions.shape[0]} valid sample positions")
         
         # Limit number of samples if specified
         if max_samples is not None and max_samples < positions.shape[0]:
@@ -392,12 +634,82 @@ class VSAMapper:
                 print(f"Processed {i + 1}/{positions.shape[0]} sample positions, "
                       f"{total_points_processed} total points")
         
-        # Update the class grid
-        self._update_class_grid()
+        # Apply Shannon entropy for feature extraction
+        self._apply_shannon_entropy()
+        
+        # Update the class grid based on entropy values
+        self._update_class_grid_from_entropy()
         
         # Clear vector cache to free memory
         self.vector_cache.clear()
         
+        # Update statistics
+        self.stats["incremental_time"] += time.time() - start_time
+        self.stats["total_samples_processed"] += positions.shape[0]
+        
         if self.verbose:
             print(f"Incremental processing complete. Processed {total_points_processed} points "
                   f"from {positions.shape[0]} sample positions")
+            print(f"Incremental processing completed in {time.time() - start_time:.2f} seconds")
+    
+    def get_occupied_entropy_grid(self) -> torch.Tensor:
+        """
+        Get the occupied entropy grid.
+        
+        Returns:
+            Tensor of shape [H, W] containing occupied entropy values
+        """
+        return self.occupied_entropy_grid
+
+    def get_empty_entropy_grid(self) -> torch.Tensor:
+        """
+        Get the empty entropy grid.
+        
+        Returns:
+            Tensor of shape [H, W] containing empty entropy values
+        """
+        return self.empty_entropy_grid
+
+    def get_global_entropy_grid(self) -> torch.Tensor:
+        """
+        Get the global entropy grid.
+        
+        Returns:
+            Tensor of shape [H, W] containing global entropy values
+        """
+        return self.global_entropy_grid
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get processing statistics.
+        
+        Returns:
+            Dictionary with processing statistics
+        """
+        # Calculate total time
+        total_time = (time.time() - self.stats["init_time"]) if "init_time" in self.stats else 0
+        
+        # Get cache statistics
+        cache_stats = self.vector_cache.get_cache_stats()
+        
+        # Combine statistics
+        combined_stats = {
+            "total_time": total_time,
+            "process_time": self.stats["process_time"],
+            "incremental_time": self.stats["incremental_time"],
+            "total_points_processed": self.stats["total_points_processed"],
+            "total_samples_processed": self.stats["total_samples_processed"],
+            "points_per_second": self.stats["total_points_processed"] / total_time if total_time > 0 else 0,
+            "cache_hit_rate": cache_stats["hit_rate"],
+            "cache_size": cache_stats["cache_size"],
+            "cache_max_size": cache_stats["max_size"]
+        }
+        
+        # Add memory statistics if available
+        if self.stats["memory_usage"]:
+            latest_memory = self.stats["memory_usage"][-1]
+            combined_stats["current_memory_gb"] = latest_memory[1]
+            combined_stats["max_memory_gb"] = latest_memory[2]
+            combined_stats["memory_usage_ratio"] = latest_memory[1] / latest_memory[2]
+        
+        return combined_stats

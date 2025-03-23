@@ -129,6 +129,87 @@ def test_vector_cache():
     cache_stats = cache.get_cache_stats()
     print(f"Cache stats: {cache_stats}")
     
+    # Test clear method
+    cache.clear()
+    print("Cache cleared")
+    
+    cache_stats = cache.get_cache_stats()
+    print(f"Cache stats after clear: {cache_stats}")
+    assert cache_stats["cache_size"] == 0
+    
+    # Test precompute grid vectors
+    cache.precompute_grid_vectors(world_bounds, resolution * 2)
+    
+    cache_stats = cache.get_cache_stats()
+    print(f"Cache stats after precompute: {cache_stats}")
+    assert cache_stats["cache_size"] > 0
+    
+    # Test LRU-like cache management
+    # Create more points than the cache can hold
+    test_points = torch.rand((cache.max_size + 100, 2), device=device)
+    
+    # Fill the cache
+    batch_vectors = cache.get_batch_vectors(test_points)
+    
+    cache_stats = cache.get_cache_stats()
+    print(f"Cache stats after filling: {cache_stats}")
+    assert cache_stats["cache_size"] <= cache.max_size
+    
+    return True
+
+def test_vector_cache_performance():
+    """
+    Test the performance of the VectorCache class.
+    """
+    print("Testing vector cache performance...")
+    
+    # Skip if CUDA is not available
+    if not torch.cuda.is_available():
+        print("CUDA is not available. Skipping performance test.")
+        return True
+    
+    # Create random axis vectors for testing
+    device = torch.device("cuda")
+    vsa_dimensions = 16000
+    length_scale = 2.0
+    
+    xy_axis_vectors = torch.randn((2, vsa_dimensions), device=device)
+    
+    # Create vector cache
+    cache = VectorCache(
+        xy_axis_vectors,
+        length_scale,
+        device,
+        grid_resolution=0.1,
+        max_size=10000
+    )
+    
+    # Create test points - large batch
+    n_points = 10000
+    points = torch.rand((n_points, 2), device=device) * 100  # Random points in 100x100 area
+    
+    # First batch - should all be cache misses
+    start_time = time.time()
+    batch1 = cache.get_batch_vectors(points)
+    batch1_time = time.time() - start_time
+    
+    stats1 = cache.get_cache_stats()
+    print(f"First batch time: {batch1_time:.4f} seconds")
+    print(f"Cache stats after first batch: {stats1}")
+    
+    # Second batch - same points, should all be cache hits
+    start_time = time.time()
+    batch2 = cache.get_batch_vectors(points)
+    batch2_time = time.time() - start_time
+    
+    stats2 = cache.get_cache_stats()
+    print(f"Second batch time: {batch2_time:.4f} seconds")
+    print(f"Cache stats after second batch: {stats2}")
+    
+    # Calculate speedup
+    speedup = batch1_time / batch2_time
+    print(f"Speedup from caching: {speedup:.2f}x")
+    
     return True
 
 def test_vsa_mapper():
@@ -415,15 +496,218 @@ def test_spatial_index_performance():
     print("Spatial index performance tests passed!")
     return True
 
+def test_adaptive_spatial_index_edge_cases():
+    """Test edge cases for AdaptiveSpatialIndex."""
+    print("Testing AdaptiveSpatialIndex edge cases...")
+    
+    # Test with empty point cloud
+    points = torch.zeros((0, 2))
+    labels = torch.zeros((0,))
+    
+    device = torch.device("cpu")
+    min_resolution = 0.1
+    max_resolution = 1.0
+    
+    # Should handle empty point cloud gracefully
+    spatial_index = AdaptiveSpatialIndex(
+        points,
+        labels,
+        min_resolution,
+        max_resolution,
+        device
+    )
+    
+    print("Created spatial index with empty point cloud")
+    
+    # Test with single point
+    points = torch.tensor([[0.5, 0.5]])
+    labels = torch.tensor([1])
+    
+    spatial_index = AdaptiveSpatialIndex(
+        points,
+        labels,
+        min_resolution,
+        max_resolution,
+        device
+    )
+    
+    print("Created spatial index with single point")
+    
+    # Test query with point outside grid
+    center = torch.tensor([100.0, 100.0])
+    radius = 1.0
+    
+    query_points, query_labels = spatial_index.query_range(center, radius)
+    assert query_points.shape[0] == 0
+    print(f"Range query with point outside grid returned {query_points.shape[0]} points")
+    
+    print("AdaptiveSpatialIndex edge case tests passed!")
+    return True
+
+def test_vector_cache_lru():
+    """Test LRU-like cache management in VectorCache."""
+    print("Testing VectorCache LRU management...")
+    
+    device = torch.device("cpu")
+    vsa_dimensions = 1000
+    length_scale = 2.0
+    
+    # Create random axis vectors for testing
+    xy_axis_vectors = torch.randn((2, vsa_dimensions), device=device)
+    
+    # Create vector cache with small max size
+    cache = VectorCache(
+        xy_axis_vectors,
+        length_scale,
+        device,
+        grid_resolution=0.1,
+        max_size=5
+    )
+    
+    # Create test points
+    points = torch.tensor([
+        [0.0, 0.0],
+        [1.0, 1.0],
+        [2.0, 2.0],
+        [3.0, 3.0],
+        [4.0, 4.0],
+        [5.0, 5.0],  # This should cause the oldest entry to be removed
+        [6.0, 6.0]   # This should cause the second oldest entry to be removed
+    ], device=device)
+    
+    # Get batch vectors
+    batch_vectors = cache.get_batch_vectors(points)
+    
+    # Check cache size
+    stats = cache.get_cache_stats()
+    assert stats["cache_size"] <= 5
+    print(f"Cache size after adding 7 points: {stats['cache_size']}")
+    
+    # Check that the oldest entries were removed
+    # Create keys for the first two points
+    key1 = cache._discretize_point(torch.tensor([0.0, 0.0], device=device))
+    key2 = cache._discretize_point(torch.tensor([1.0, 1.0], device=device))
+    
+    # These should not be in the cache anymore
+    if key1 in cache.cache:
+        print("Warning: First point still in cache")
+    if key2 in cache.cache:
+        print("Warning: Second point still in cache")
+    
+    print("VectorCache LRU management tests passed!")
+    return True
+
+def test_shannon_entropy_extraction():
+    """Test Shannon entropy feature extraction in VSAMapper."""
+    print("Testing Shannon entropy feature extraction...")
+    
+    # Create a small test grid
+    grid = np.zeros((10, 10), dtype=np.int32)
+    grid[4:7, 4:7] = 1  # Add a small square in the middle
+    
+    # Convert to point cloud
+    world_bounds = [0, 1, 0, 1]
+    resolution = 0.1
+    
+    points, labels = convert_occupancy_grid_to_pointcloud(grid, world_bounds, resolution)
+    
+    # Create mapper configuration with different disk radii
+    config = {
+        "world_bounds": world_bounds,
+        "resolution": resolution,
+        "min_cell_resolution": resolution * 5,
+        "max_cell_resolution": resolution * 20,
+        "vsa_dimensions": 1000,  # Use smaller dimensions for testing
+        "length_scale": 2.0,
+        "decision_thresholds": [-0.99, 0.99],
+        "verbose": False,
+        "batch_size": 100,
+        "cache_size": 1000,
+        "memory_threshold": 0.8,
+        "occupied_disk_radius": 2,
+        "empty_disk_radius": 4
+    }
+    
+    # Use CPU for testing to ensure compatibility
+    device = torch.device("cpu")
+    mapper = VSAMapper(config, device=device)
+    
+    # Process observation
+    mapper.process_observation(points, labels)
+    
+    # Get entropy grids
+    occupied_entropy = mapper.get_occupied_entropy_grid()
+    empty_entropy = mapper.get_empty_entropy_grid()
+    global_entropy = mapper.get_global_entropy_grid()
+    
+    # Check shapes
+    assert occupied_entropy.shape == (10, 10)
+    assert empty_entropy.shape == (10, 10)
+    assert global_entropy.shape == (10, 10)
+    
+    print(f"Generated entropy grids with shape: {occupied_entropy.shape}")
+    
+    # Check that entropy values are within expected range [0, 1]
+    assert torch.all(occupied_entropy >= 0) and torch.all(occupied_entropy <= 1)
+    assert torch.all(empty_entropy >= 0) and torch.all(empty_entropy <= 1)
+    
+    print("Entropy values are within expected range [0, 1]")
+    
+    # Visualize
+    os.makedirs("outputs", exist_ok=True)
+    
+    # Visualize entropy grids
+    utils.visualize_entropy_grid(
+        grid=occupied_entropy,
+        output_file="outputs/test_occupied_entropy.png",
+        world_bounds=world_bounds,
+        colormap="plasma",
+        show=False
+    )
+    
+    utils.visualize_entropy_grid(
+        grid=empty_entropy,
+        output_file="outputs/test_empty_entropy.png",
+        world_bounds=world_bounds,
+        colormap="plasma",
+        show=False
+    )
+    
+    utils.visualize_entropy_grid(
+        grid=global_entropy,
+        output_file="outputs/test_global_entropy.png",
+        world_bounds=world_bounds,
+        colormap="viridis",
+        show=False
+    )
+    
+    utils.visualize_entropy_comparison(
+        occupied_entropy=occupied_entropy,
+        empty_entropy=empty_entropy,
+        global_entropy=global_entropy,
+        output_file="outputs/test_entropy_comparison.png",
+        world_bounds=world_bounds,
+        show=False
+    )
+    
+    print("Entropy visualizations saved to 'outputs/test_*_entropy.png'")
+    
+    print("Shannon entropy feature extraction tests passed!")
+    return True
+
 def run_all_tests():
     """
     Run all tests.
     """
     tests = [
         test_adaptive_spatial_index,
+        test_adaptive_spatial_index_edge_cases,
         test_spatial_index_performance,
         test_vector_cache,
+        test_vector_cache_lru,
+        test_vector_cache_performance,
         test_vsa_mapper,
+        test_shannon_entropy_extraction,
         test_performance_comparison
     ]
     

@@ -35,13 +35,13 @@ pointcloud_to_ogm(
 
 ### Advanced Features
 
-VSA-OGM now includes optimized processing with adaptive spatial indexing, vector caching, and incremental processing:
+VSA-OGM now includes optimized processing with adaptive spatial indexing, vector caching, incremental processing, and Shannon entropy feature extraction:
 
 ```python
 from vsa_ogm import pointcloud_to_ogm
 
-# Convert a point cloud to an occupancy grid map with incremental processing
-pointcloud_to_ogm(
+# Convert a point cloud to an occupancy grid map with incremental processing and Shannon entropy
+result = pointcloud_to_ogm(
     input_file="inputs/obstacle_map.npy",
     output_file="outputs/incremental_grid.npz",
     world_bounds=[-50, 50, -50, 50],
@@ -50,11 +50,25 @@ pointcloud_to_ogm(
     horizon_distance=10.0,           # Maximum distance from sample points
     sample_resolution=1.0,           # Resolution for sampling grid
     max_samples=100,                 # Maximum number of sample positions
+    safety_margin=0.5,               # Minimum distance from occupied points for sampling
     batch_size=1000,                 # Batch size for processing points
     cache_size=10000,                # Maximum size of vector cache
     memory_threshold=0.8,            # Threshold for GPU memory usage
+    occupied_disk_radius=2,          # Radius for occupied disk filter in entropy calculation
+    empty_disk_radius=4,             # Radius for empty disk filter in entropy calculation
+    save_entropy_grids=True,         # Save entropy grids in output file
+    save_stats=True,                 # Save processing statistics
+    visualize=True,                  # Generate visualizations
     verbose=True
 )
+
+# Access results
+occupancy_grid = result["grid"]
+class_grid = result["class_grid"]
+occupied_entropy = result["occupied_entropy"]
+empty_entropy = result["empty_entropy"]
+global_entropy = result["global_entropy"]
+stats = result["stats"]
 ```
 
 ### Command Line Interface
@@ -67,6 +81,9 @@ vsa-ogm inputs/obstacle_map.npy outputs/obstacle_grid.npz --verbose
 
 # With incremental processing
 vsa-ogm inputs/obstacle_map.npy outputs/incremental_grid.npz --incremental --horizon 10.0 --verbose
+
+# With Shannon entropy and visualization
+vsa-ogm inputs/obstacle_map.npy outputs/entropy_grid.npz --incremental --occupied-disk-radius 2 --empty-disk-radius 4 --save-entropy-grids --visualize --verbose
 ```
 
 Or you can run the module directly:
