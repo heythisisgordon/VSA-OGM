@@ -39,14 +39,26 @@ class SpatialIndex:
             
         self.device = device
         self.cell_size = cell_size
-        self.dimensionality = self.points.shape[1]
         
-        # Compute bounds
-        self.min_bounds = torch.min(self.points, dim=0)[0]
-        self.max_bounds = torch.max(self.points, dim=0)[0]
-        
-        # Create grid
-        self._build_grid()
+        # Handle empty point sets
+        if self.points.shape[0] == 0:
+            # For empty point sets, create a dummy grid
+            self.dimensionality = self.points.shape[1]
+            self.min_bounds = torch.zeros(self.dimensionality, device=self.device)
+            self.max_bounds = torch.zeros(self.dimensionality, device=self.device)
+            self.grid_size = torch.ones(self.dimensionality, device=self.device, dtype=torch.long)
+            self.point_cell_ids = torch.tensor([], device=self.device, dtype=torch.long)
+            self.cell_to_points = {}
+        else:
+            # Normal case with non-empty point set
+            self.dimensionality = self.points.shape[1]
+            
+            # Compute bounds
+            self.min_bounds = torch.min(self.points, dim=0)[0]
+            self.max_bounds = torch.max(self.points, dim=0)[0]
+            
+            # Create grid
+            self._build_grid()
         
     def _build_grid(self) -> None:
         """Build the spatial grid index."""

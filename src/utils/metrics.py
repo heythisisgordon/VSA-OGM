@@ -361,6 +361,53 @@ def plot_runtime_metrics(runtimes: Dict[str, List[float]],
     return fig
 
 
+def dimension_vs_performance(dimensions_list: List[int], 
+                            metrics_list: List[Dict[str, float]],
+                            ax: Optional[plt.Axes] = None,
+                            title: str = 'Performance vs VSA Dimensions',
+                            figsize: Tuple[int, int] = (10, 6)) -> plt.Figure:
+    """
+    Plot performance metrics vs dimensions.
+    
+    Args:
+        dimensions_list: List of VSA dimensions used
+        metrics_list: List of dictionaries containing metrics for each dimension
+        ax: Optional matplotlib axes to plot on
+        title: Title for the plot
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib figure
+    """
+    # Create figure and axes if not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+        
+    # Plot metrics vs dimensions
+    for metric_name in metrics_list[0].keys():
+        values = [metrics[metric_name] for metrics in metrics_list]
+        ax.plot(dimensions_list, values, marker='o', label=metric_name)
+    
+    # Set x-axis to log scale (base 2)
+    ax.set_xscale('log', base=2)
+    
+    # Set labels and title
+    ax.set_xlabel('VSA Dimensions')
+    ax.set_ylabel('Metric Value')
+    ax.set_title(title)
+    
+    # Add legend and grid
+    ax.legend()
+    ax.grid(True)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    return fig
+
+
 def compare_with_ground_truth(prediction: Union[np.ndarray, torch.Tensor],
                              ground_truth: Union[np.ndarray, torch.Tensor],
                              threshold: float = 0.5) -> Dict[str, float]:

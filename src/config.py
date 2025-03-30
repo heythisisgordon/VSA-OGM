@@ -7,7 +7,24 @@ including default parameters, validation, and loading/saving configurations.
 
 import os
 import json
+import numpy as np
 from typing import Dict, Any, Optional, Union
+
+
+class DotDict(dict):
+    """
+    Dictionary subclass that allows dot notation access to keys.
+    """
+    def __getattr__(self, key):
+        if key in self:
+            value = self[key]
+            if isinstance(value, dict):
+                return DotDict(value)
+            return value
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
+    
+    def __setattr__(self, key, value):
+        self[key] = value
 
 
 class Config:
@@ -16,6 +33,9 @@ class Config:
     
     This class manages configuration parameters for the Sequential VSA-OGM system,
     providing default values, validation, and loading/saving functionality.
+    
+    Configuration parameters can be accessed using dot notation:
+    config.vsa.dimensions
     """
     
     # Default configuration parameters
@@ -67,6 +87,10 @@ class Config:
             
         # Validate configuration
         self._validate_config()
+        
+        # Create dot-accessible attributes
+        for section, params in self.config.items():
+            setattr(self, section, DotDict(params))
         
     def _deep_copy_dict(self, d: Dict[str, Any]) -> Dict[str, Any]:
         """Create a deep copy of a dictionary."""
@@ -164,6 +188,12 @@ class Config:
         # Validate configuration after update
         self._validate_config()
         
+        # Update dot-accessible attribute
+        if hasattr(self, section):
+            getattr(self, section)[param] = value
+        else:
+            setattr(self, section, DotDict(self.config[section]))
+        
     def save(self, filepath: str) -> None:
         """
         Save configuration to file.
@@ -205,3 +235,28 @@ class Config:
     def __str__(self) -> str:
         """String representation of configuration."""
         return json.dumps(self.config, indent=2)
+        
+    def calculate_recommended_dimensions(self, 
+                                        world_size: float,
+                                        resolution: float,
+                                        quadrant_size: int) -> int:
+        """
+        Calculate recommended VSA dimensions based on environment parameters.
+        
+        Args:
+            world_size: Size of the world (maximum of width and height)
+            resolution: Desired resolution for sampling
+            quadrant_size: Number of quadrants along each axis
+            
+        Returns:
+            Recommended number of dimensions for VSA vectors
+        """
+        # Estimate points per dimension
+        points_per_dim = world_size / resolution
+        # Estimate total points
+        total_points = points_per_dim ** 2
+        # Calculate minimum dimensions needed (using heuristic from original)
+        min_dims = int(max(1024, min(200000, total_points / (quadrant_size ** 2) * 16)))
+        # Round to nearest power of 2 for better FFT performance
+        power = int(np.ceil(np.log2(min_dims)))
+        return 2 ** power

@@ -13,6 +13,7 @@ This system processes point clouds by sampling observation points sequentially a
 - **Efficient Memory Usage**: Constant memory complexity regardless of point cloud size
 - **Sequential Processing**: Processes point clouds incrementally from sample positions
 - **Quadrant-Based Memory**: Divides the world into quadrants for efficient memory usage
+- **Adaptive Dimensionality**: Automatically selects optimal VSA vector dimensions based on environment complexity
 - **Shannon Entropy Extraction**: Uses entropy for feature extraction and classification
 - **Visualization Tools**: Comprehensive visualization capabilities for results analysis
 
@@ -141,6 +142,31 @@ See the `examples` directory for more detailed examples:
 
 - `basic_usage.py`: Simple example showing core functionality
 - `visualization.py`: Examples of different visualization options
+
+## Adaptive Dimensionality
+
+The system now features adaptive dimensionality selection for VSA vectors, which automatically determines the optimal number of dimensions based on environment complexity:
+
+- **Auto-configuration**: When no dimensions are specified, the system calculates the recommended dimensions based on world size, resolution, and quadrant configuration
+- **Progressive Dimensionality**: Starts with a lower dimension and increases if mapping quality is insufficient
+- **Dimension Validation**: Warns if the selected dimensions are too small for the environment
+- **CUDA Memory Management**: Automatically reduces dimensions if CUDA memory is exceeded
+- **Performance Monitoring**: Includes tools to analyze the relationship between dimensions and performance metrics
+
+The dimensionality is calculated using the following heuristic:
+```python
+# Estimate points per dimension
+points_per_dim = world_size / resolution
+# Estimate total points
+total_points = points_per_dim ** 2
+# Calculate minimum dimensions needed
+min_dims = max(1024, min(200000, total_points / (quadrant_size ** 2) * 16))
+# Round to nearest power of 2 for better FFT performance
+power = int(np.ceil(np.log2(min_dims)))
+dimensions = 2 ** power
+```
+
+This approach ensures that the system uses sufficient dimensions for complex environments while maintaining computational efficiency for simpler ones.
 
 ## Architecture
 
